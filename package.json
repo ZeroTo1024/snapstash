@@ -1,0 +1,29 @@
+{
+  "name": "snapstash",
+  "version": "0.1.0",
+  "description": "Snapshot git index or a directory to JSON with optional encryption",
+  "type": "commonjs",
+  "bin": {
+    "snapstash": "bin/snapstash.js"
+  },
+  "files": [
+    "bin",
+    "backup.js",
+    "restore.js",
+    "crypto.js",
+    "config.js",
+    "README.md"
+  ],
+  "keywords": [
+    "backup",
+    "restore",
+    "git",
+    "stash",
+    "snapshot",
+    "cli"
+  ],
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=18"
+  }
+}
