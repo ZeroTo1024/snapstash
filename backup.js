@@ -548,6 +548,16 @@ function runBackup(options) {
   const backupMessages = messages.backup || {};
 
   const password = resolvePassword(options.pw || configPassword, pwEnv);
+  let pwSource = null;
+  if (options.pwProvided) {
+    if (options.pw) {
+      pwSource = "arg";
+    } else if (configPassword) {
+      pwSource = "config";
+    } else if (pwEnv && process.env[pwEnv]) {
+      pwSource = "env";
+    }
+  }
 
   const onProgress = options.progress
     ? (item, index, total, rawBytes, brBytes) => {
@@ -604,7 +614,8 @@ function runBackup(options) {
   if (options.pwProvided && password) {
     const label = summary.pwMasked || "Encryption key";
     const masked = maskSecret(password);
-    console.log(`${colorize(label, COLORS.yellow)}: ${colorize(masked, COLORS.bold)}`);
+    const suffix = pwSource === "config" ? ` ${summary.pwFromConfig || "(from config.json)"}` : "";
+    console.log(`${colorize(label, COLORS.yellow)}: ${colorize(masked, COLORS.bold)}${suffix}`);
   }
 
   if (options.copy) {

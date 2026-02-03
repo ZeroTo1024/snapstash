@@ -26,7 +26,8 @@
       "ratio": "压缩比",
       "success": "执行成功",
       "entries": "个条目",
-      "pwMasked": "加密秘钥"
+      "pwMasked": "加密秘钥",
+      "pwFromConfig": "(from config.json)"
     },
     "clipboard": "已复制到剪贴板"
   },

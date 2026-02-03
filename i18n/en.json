@@ -26,7 +26,8 @@
       "ratio": "Ratio",
       "success": "Done",
       "entries": "entries",
-      "pwMasked": "Encryption key"
+      "pwMasked": "Encryption key",
+      "pwFromConfig": "(from config.json)"
     },
     "clipboard": "Copied to clipboard"
   },
