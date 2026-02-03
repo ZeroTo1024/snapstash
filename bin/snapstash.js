@@ -83,6 +83,11 @@ function parseBackupArgs(argv) {
     help: false,
     copy: false,
     progress: true,
+    noConcurrency: false,
+    threads: null,
+    bigFileMB: null,
+    totalSizeMB: null,
+    fileCountThreshold: null,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -124,6 +129,30 @@ function parseBackupArgs(argv) {
     }
     if (arg === "--config") {
       out.configPath = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === "--no-concurrency") {
+      out.noConcurrency = true;
+      continue;
+    }
+    if (arg === "--threads") {
+      out.threads = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === "--bigfile-mb") {
+      out.bigFileMB = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === "--total-size-mb") {
+      out.totalSizeMB = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === "--file-count-threshold") {
+      out.fileCountThreshold = argv[i + 1];
       i += 1;
       continue;
     }
@@ -333,9 +362,10 @@ async function runInit() {
       passwordEnv: DEFAULT_PW_ENV,
       concurrency: {
         enabled: true,
-        threads: 4,
-        bigFileMB: 1,
-        fileCountThreshold: 80
+        threads: require("../constants").DEFAULT_THREADS,
+        bigFileMB: require("../constants").DEFAULT_BIGFILE_MB,
+        totalSizeMB: require("../constants").DEFAULT_TOTALSIZE_MB,
+        fileCountThreshold: require("../constants").DEFAULT_FILECOUNT_THRESHOLD,
       },
       excludes: [
         ".snapstash/",

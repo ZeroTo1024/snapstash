@@ -56,6 +56,9 @@ snapstash i --pw 123
 # copy backup text to clipboard
 snapstash b --clipboard
 
+# use a specific config file
+snapstash b --config ./config.json
+
 # create .snapstash template and add to .gitignore (if git repo)
 snapstash init
 ```
@@ -71,8 +74,14 @@ snapstash b [options]
 Options:
 
 - `--output, -o <file>` output file (default `.snapstash/.backup`)
+- `--config <file>` use config file
 - `--pw <password>` encryption password (if empty, only compress)
 - `--pw-env <ENV>` password env name (default `SNAPSTASH_PW`)
+- `--no-concurrency` disable concurrency (single-thread)
+- `--threads <n>` worker threads
+- `--bigfile-mb <n>` big file threshold (MB)
+- `--total-size-mb <n>` total size threshold (MB)
+- `--file-count-threshold <n>` file count threshold
 - `--clipboard, --c` copy backup text to clipboard
 - `--no-progress` disable progress logs
 - `--root, --dir <path>` backup a directory (filesystem mode)
@@ -87,6 +96,7 @@ snapstash r [options]
 Options:
 
 - `--input, -i <file>` input file (default `.snapstash/.backup`)
+- `--config <file>` use config file
 - `--root, --dir <path>` restore directory (default cwd)
 - `--pw <password>` decryption password
 - `--pw-env <ENV>` password env name (default `SNAPSTASH_PW`)
@@ -118,7 +128,9 @@ Interactive steps:
 
 ## Config (.snapstash/config.json)
 
-You can place a `.snapstash/config.json` file in the project root:
+You can place a `.snapstash/config.json` file in the project root. If it does not exist,
+Snapstash will fall back to a global config at `~/.snapstash/config.json` (read-only).
+Backup output is still written to `[pwd]/.snapstash/.backup` (or `--root`).
 
 ```
 {
@@ -126,14 +138,28 @@ You can place a `.snapstash/config.json` file in the project root:
   "lang": "en",
   "password": "",
   "passwordEnv": "SNAPSTASH_PW",
-  "excludes": [".snapstash/", "node_modules/", "dist/", "*.log"]
+  "concurrency": {
+    "enabled": true,
+    "threads": 4,
+    "bigFileMB": 1,
+    "totalSizeMB": 5,
+    "fileCountThreshold": 30
+  },
+ "excludes": [".snapstash/", "node_modules/", "dist/", "*.log"]
 }
 ```
 
 - `password`/`passwordEnv` are used when `--pw` is not provided.
+- `concurrency` controls parallel compression; set `enabled: false` to disable.
+- `totalSizeMB` triggers concurrency when total raw size reaches the threshold.
 - `excludes` are matched against relative paths. `dir/` excludes the directory, `*.log` matches simple globs.
 - `lang`/`language` supports `en` (default) or `zh` for help and logs.
   - Locale strings are stored in `i18n/en.json` and `i18n/zh.json`.
+
+Config resolution order:
+1) `--config <file>`
+2) `[project]/.snapstash/config.json`
+3) `~/.snapstash/config.json`
 
 ## Notes
 
@@ -145,9 +171,8 @@ You can place a `.snapstash/config.json` file in the project root:
 - Use `--clipboard` (or `--c`) to copy backup text to clipboard.
 - Backup/restore will print progress by default; use `--no-progress` to disable.
 
-## Link
+## Links
 
-- [Nano Banana 2](https://ricebowl.ai/m/nano-banana-2)
-- [Sora 2](https://ricebowl.ai/m/sora/sora-2)
-- [Grok Video](https://ricebowl.ai/m/grok-video)
-- [Ricebowl AI](https://ricebowl.ai)
+- https://ricebowl.ai/m/nano-banana-2
+- https://ricebowl.ai/m/sora/sora-2
+- https://ricebowl.ai

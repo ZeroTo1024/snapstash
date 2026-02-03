@@ -17,6 +17,10 @@ const {
   STATUS_LABEL_WIDTH,
   PATH_LABEL_WIDTH,
   FIELD_GAP,
+  DEFAULT_THREADS,
+  DEFAULT_BIGFILE_MB,
+  DEFAULT_TOTALSIZE_MB,
+  DEFAULT_FILECOUNT_THRESHOLD,
 } = require("./constants");
 const {
   buildExcludeMatcher,
@@ -34,9 +38,6 @@ const {
 const DEFAULT_BACKUP_FILE = `${DEFAULT_CONFIG_DIR}/${DEFAULT_BACKUP_NAME}`;
 const DEFAULT_PAYLOAD_ENCODING = "br";
 const GIT_MAX_BUFFER = 32 * 1024 * 1024;
-const DEFAULT_THREADS = Math.max(2, Math.min(4, os.cpus().length || 2));
-const DEFAULT_BIGFILE_MB = 1;
-const DEFAULT_FILECOUNT_THRESHOLD = 80;
 const COLOR_ENABLED = process.stdout.isTTY;
 
 const COLORS = {
@@ -84,6 +85,7 @@ function printHelp() {
       formatMessage(help.noConcurrency, vars),
       formatMessage(help.threads, vars),
       formatMessage(help.bigFileMB, vars),
+      formatMessage(help.totalSizeMB, vars),
       formatMessage(help.fileCountThreshold, vars),
       formatMessage(help.clipboard, vars),
       formatMessage(help.noProgress, vars),
@@ -106,6 +108,7 @@ function parseArgs(argv) {
     noConcurrency: false,
     threads: null,
     bigFileMB: null,
+    totalSizeMB: null,
     fileCountThreshold: null,
     configPath: null,
     root: null,
@@ -168,6 +171,11 @@ function parseArgs(argv) {
     }
     if (arg === "--bigfile-mb") {
       out.bigFileMB = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === "--total-size-mb") {
+      out.totalSizeMB = argv[i + 1];
       i += 1;
       continue;
     }
@@ -302,6 +310,12 @@ function getIndexEntryMeta(cwd, filePath) {
   return { mode, blob };
 }
 
+function getBlobSize(cwd, blob) {
+  const out = tryGitText(cwd, ["cat-file", "-s", blob]);
+  const size = Number.parseInt(out, 10);
+  return Number.isFinite(size) ? size : 0;
+}
+
 function brotliCompress(buffer) {
   return zlib.brotliCompressSync(buffer);
 }
@@ -362,10 +376,13 @@ function padDisplay(text, targetWidth) {
 
 function resolveConcurrencyConfig(config) {
   const concurrency = config && typeof config === "object" ? config.concurrency : null;
+  const cpuCount = os.cpus().length || 2;
+  const defaultThreads = Math.max(2, Math.min(DEFAULT_THREADS, cpuCount));
   return {
     enabled: concurrency?.enabled !== false,
-    threads: Number.isFinite(concurrency?.threads) ? Number(concurrency.threads) : DEFAULT_THREADS,
+    threads: Number.isFinite(concurrency?.threads) ? Number(concurrency.threads) : defaultThreads,
     bigFileMB: Number.isFinite(concurrency?.bigFileMB) ? Number(concurrency.bigFileMB) : DEFAULT_BIGFILE_MB,
+    totalSizeMB: Number.isFinite(concurrency?.totalSizeMB) ? Number(concurrency.totalSizeMB) : DEFAULT_TOTALSIZE_MB,
     fileCountThreshold: Number.isFinite(concurrency?.fileCountThreshold)
       ? Number(concurrency.fileCountThreshold)
       : DEFAULT_FILECOUNT_THRESHOLD,
@@ -444,7 +461,28 @@ async function collectFromGitIndex(repoRoot, excludeMatcher, onProgress, stats, 
   const workerPath = path.join(__dirname, "workers", "compress-worker.js");
   let pool = null;
   const bigFileBytes = concurrency.bigFileMB * 1024 * 1024;
+  const totalSizeBytes = concurrency.totalSizeMB * 1024 * 1024;
   const usePoolByCount = concurrency.enabled && filtered.length >= concurrency.fileCountThreshold;
+  let usePoolByTotal = false;
+  if (concurrency.enabled && totalSizeBytes > 0) {
+    let totalBytes = 0;
+    for (const item of filtered) {
+      if (item.kind === "D") continue;
+      const meta = getIndexEntryMeta(repoRoot, item.path);
+      if (!meta) continue;
+      if (meta.mode === "160000") continue;
+      if (meta.mode === "120000") {
+        const content = runGit(repoRoot, ["show", `:${item.path}`], { text: false });
+        totalBytes += content.length;
+      } else {
+        totalBytes += getBlobSize(repoRoot, meta.blob);
+      }
+      if (totalBytes >= totalSizeBytes) {
+        usePoolByTotal = true;
+        break;
+      }
+    }
+  }
   const getPool = () => {
     if (!pool) {
       pool = new WorkerPool(concurrency.threads, workerPath);
@@ -512,7 +550,7 @@ async function collectFromGitIndex(repoRoot, excludeMatcher, onProgress, stats, 
       onProgress(item, idx + 1, filtered.length, content.length, 0, 0, "processing");
     }
     let compressed;
-    if (concurrency.enabled && (usePoolByCount || content.length >= bigFileBytes)) {
+    if (concurrency.enabled && (usePoolByCount || usePoolByTotal || content.length >= bigFileBytes)) {
       const { buffer } = await getPool().runTask({ buffer: content });
       compressed = Buffer.from(buffer);
     } else {
@@ -545,8 +583,10 @@ async function collectFromFs(rootAbs, outputAbs, excludeMatcher, onProgress, sta
   let fileTotal = 0;
   const workerPath = path.join(__dirname, "workers", "compress-worker.js");
   const bigFileBytes = concurrency.bigFileMB * 1024 * 1024;
+  const totalSizeBytes = concurrency.totalSizeMB * 1024 * 1024;
   let pool = null;
   let usePoolByCount = false;
+  let usePoolByTotal = false;
   const getPool = () => {
     if (!pool) pool = new WorkerPool(concurrency.threads, workerPath);
     return pool;
@@ -603,7 +643,7 @@ async function collectFromFs(rootAbs, outputAbs, excludeMatcher, onProgress, sta
           m: stat.mode.toString(8),
         };
         let compressed;
-        if (concurrency.enabled && (usePoolByCount || content.length >= bigFileBytes)) {
+        if (concurrency.enabled && (usePoolByCount || usePoolByTotal || content.length >= bigFileBytes)) {
           const { buffer } = await getPool().runTask({ buffer: content });
           compressed = Buffer.from(buffer);
         } else {
@@ -628,10 +668,11 @@ async function collectFromFs(rootAbs, outputAbs, excludeMatcher, onProgress, sta
     }
   }
 
-  if (onProgress || (concurrency.enabled && concurrency.fileCountThreshold > 0)) {
+  if (onProgress || (concurrency.enabled && (concurrency.fileCountThreshold > 0 || concurrency.totalSizeMB > 0))) {
     const countFiles = (dir) => {
       const entries = fs.readdirSync(dir, { withFileTypes: true });
       let count = 0;
+      let bytes = 0;
       for (const entry of entries) {
         if (entry.name === ".git") continue;
         const absPath = path.join(dir, entry.name);
@@ -639,15 +680,27 @@ async function collectFromFs(rootAbs, outputAbs, excludeMatcher, onProgress, sta
         if (excludeMatcher && excludeMatcher(relPath)) continue;
         if (outputResolved && path.resolve(absPath) === outputResolved) continue;
         if (entry.isDirectory()) {
-          count += countFiles(absPath);
+          const result = countFiles(absPath);
+          count += result.count;
+          bytes += result.bytes;
         } else if (entry.isFile() || entry.isSymbolicLink()) {
           count += 1;
+          if (entry.isFile()) {
+            bytes += fs.statSync(absPath).size;
+          } else {
+            const link = fs.readlinkSync(absPath, "utf8");
+            bytes += Buffer.byteLength(link, "utf8");
+          }
         }
       }
-      return count;
+      return { count, bytes };
     };
-    fileTotal = countFiles(rootAbs);
+    const totals = countFiles(rootAbs);
+    fileTotal = totals.count;
     usePoolByCount = concurrency.enabled && fileTotal >= concurrency.fileCountThreshold;
+    if (concurrency.enabled && totalSizeBytes > 0) {
+      usePoolByTotal = totals.bytes >= totalSizeBytes;
+    }
   }
 
   await walk("");
@@ -763,6 +816,7 @@ async function runBackup(options) {
   }
   if (options.threads) concurrency.threads = Number(options.threads);
   if (options.bigFileMB) concurrency.bigFileMB = Number(options.bigFileMB);
+  if (options.totalSizeMB) concurrency.totalSizeMB = Number(options.totalSizeMB);
   if (options.fileCountThreshold) concurrency.fileCountThreshold = Number(options.fileCountThreshold);
   const excludeMatcher = buildExcludeMatcher(excludes);
   const pwEnv = options.pwEnv || resolveConfigPwEnv(config) || DEFAULT_PW_ENV;
@@ -782,7 +836,7 @@ async function runBackup(options) {
     pwSource = "env";
   }
 
-  const renderer = createProgressRenderer();
+  const renderer = createProgressRenderer({ windowSize: 30 });
   let rendererStarted = false;
   const logProgress = options.progress
     ? (item, index, total, rawBytes, brBytes, durationMs, status) => {
@@ -804,7 +858,7 @@ async function runBackup(options) {
             renderer.start(total);
             rendererStarted = true;
           }
-          renderer.update(index, line);
+          renderer.update(index, line, statusText);
         } else {
           console.log(line);
         }

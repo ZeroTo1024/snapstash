@@ -1,4 +1,4 @@
-function createProgressRenderer() {
+function createProgressRenderer({ windowSize = 30 } = {}) {
   if (!process.stdout.isTTY) return null;
   try {
     const logUpdateModule = require("log-update");
@@ -7,18 +7,27 @@ function createProgressRenderer() {
     const hideCursor = ansiEscapes?.cursorHide || "";
     const showCursor = ansiEscapes?.cursorShow || "";
     let rows = [];
+    let statuses = [];
+    let total = 0;
     let active = true;
 
-    const start = (total) => {
+    const start = (count) => {
+      total = count || 0;
       rows = Array.from({ length: total }, () => "");
+      statuses = Array.from({ length: total }, () => "");
       if (hideCursor) process.stdout.write(hideCursor);
     };
 
-    const update = (index, line) => {
+    const update = (index, line, status) => {
       if (!active) return;
       const i = Math.max(1, index) - 1;
       rows[i] = line;
-      logUpdate(rows.join("\n"));
+      statuses[i] = status || statuses[i] || "";
+      const visible = rows.filter(Boolean);
+      const windowRows = visible.slice(-windowSize);
+      const doneCount = statuses.filter((s) => s === "done").length;
+      const header = `\x1b[2mProgress: ${doneCount}/${total}\x1b[0m`;
+      logUpdate([header, ...windowRows].join("\n"));
     };
 
     const stop = () => {

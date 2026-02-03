@@ -285,7 +285,7 @@ function runRestore(options) {
     ? backup.data.map((value) => decodePayload(value, backup.payloadEncoding || "br"))
     : backup.data;
   const total = items.length;
-  const renderer = createProgressRenderer();
+  const renderer = createProgressRenderer({ windowSize: 30 });
   let rendererStarted = false;
   const emitProgress = (status, index, rawBytes, brBytes, durationMs, relPath) => {
     if (!options.progress) return;
@@ -306,7 +306,7 @@ function runRestore(options) {
         renderer.start(total);
         rendererStarted = true;
       }
-      renderer.update(index, line);
+      renderer.update(index, line, statusText);
     } else {
       console.log(line);
     }
