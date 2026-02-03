@@ -331,6 +331,12 @@ async function runInit() {
       lang: normalizedLang,
       password: passwordInput || "",
       passwordEnv: DEFAULT_PW_ENV,
+      concurrency: {
+        enabled: true,
+        threads: 4,
+        bigFileMB: 2,
+        fileCountThreshold: 100
+      },
       excludes: [
         ".snapstash/",
         "node_modules/",
@@ -359,8 +365,7 @@ function main() {
   const [cmdRaw, ...rest] = args;
   if (!cmdRaw) {
     const options = parseBackupArgs([]);
-    runBackup(options);
-    return;
+    return runBackup(options);
   }
   if (cmdRaw === "--help" || cmdRaw === "-h") {
     printHelp();
@@ -379,8 +384,7 @@ function main() {
       printHelp();
       return;
     }
-    runBackup(options);
-    return;
+    return runBackup(options);
   }
 
   if (cmd === "restore") {

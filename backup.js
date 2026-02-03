@@ -3,8 +3,10 @@
 
 const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const zlib = require("node:zlib");
+const { Worker } = require("node:worker_threads");
 
 const { resolvePassword, DEFAULT_PW_ENV } = require("./crypto");
 const { encodeEncryptedToText, encodePlainToText } = require("./backup-format");
@@ -25,6 +27,9 @@ const {
 const DEFAULT_BACKUP_FILE = `${DEFAULT_CONFIG_DIR}/${DEFAULT_BACKUP_NAME}`;
 const DEFAULT_PAYLOAD_ENCODING = "br";
 const GIT_MAX_BUFFER = 32 * 1024 * 1024;
+const DEFAULT_THREADS = Math.max(2, Math.min(4, os.cpus().length || 2));
+const DEFAULT_BIGFILE_MB = 2;
+const DEFAULT_FILECOUNT_THRESHOLD = 100;
 const COLOR_ENABLED = process.stdout.isTTY;
 
 const COLORS = {
@@ -40,6 +45,42 @@ const COLORS = {
 function colorize(text, color) {
   if (!COLOR_ENABLED) return text;
   return `${color}${text}${COLORS.reset}`;
+}
+
+function createProgressRenderer() {
+  if (!process.stdout.isTTY) return null;
+  try {
+    const logUpdateModule = require("log-update");
+    const logUpdate = logUpdateModule?.default || logUpdateModule;
+    const ansiEscapes = require("ansi-escapes");
+    const hideCursor = ansiEscapes?.cursorHide || "";
+    const showCursor = ansiEscapes?.cursorShow || "";
+    let rows = [];
+    let active = true;
+
+    const start = (total) => {
+      rows = Array.from({ length: total }, () => "");
+      if (hideCursor) process.stdout.write(hideCursor);
+    };
+
+    const update = (index, line) => {
+      if (!active) return;
+      const i = Math.max(1, index) - 1;
+      rows[i] = line;
+      logUpdate(rows.join("\n"));
+    };
+
+    const stop = () => {
+      if (!active) return;
+      active = false;
+      logUpdate.done();
+      if (showCursor) process.stdout.write(showCursor);
+    };
+
+    return { start, update, stop };
+  } catch {
+    return null;
+  }
 }
 
 function resolveHelpLang() {
@@ -69,6 +110,10 @@ function printHelp() {
       formatMessage(help.pw, vars),
       formatMessage(help.pwEnv, vars),
       formatMessage(help.config, vars),
+      formatMessage(help.noConcurrency, vars),
+      formatMessage(help.threads, vars),
+      formatMessage(help.bigFileMB, vars),
+      formatMessage(help.fileCountThreshold, vars),
       formatMessage(help.clipboard, vars),
       formatMessage(help.noProgress, vars),
       formatMessage(help.root, vars),
@@ -87,6 +132,10 @@ function parseArgs(argv) {
     pwProvided: false,
     pwEnv: null,
     noEncrypt: false,
+    noConcurrency: false,
+    threads: null,
+    bigFileMB: null,
+    fileCountThreshold: null,
     configPath: null,
     root: null,
     from: null,
@@ -134,6 +183,25 @@ function parseArgs(argv) {
     }
     if (arg === "--config") {
       out.configPath = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === "--no-concurrency") {
+      out.noConcurrency = true;
+      continue;
+    }
+    if (arg === "--threads") {
+      out.threads = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === "--bigfile-mb") {
+      out.bigFileMB = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === "--file-count-threshold") {
+      out.fileCountThreshold = argv[i + 1];
       i += 1;
       continue;
     }
@@ -303,7 +371,74 @@ function formatDuration(ms) {
   return `${(ms / 1000).toFixed(2)}s`;
 }
 
-function collectFromGitIndex(repoRoot, excludeMatcher, onProgress, stats) {
+function resolveConcurrencyConfig(config) {
+  const concurrency = config && typeof config === "object" ? config.concurrency : null;
+  return {
+    enabled: concurrency?.enabled !== false,
+    threads: Number.isFinite(concurrency?.threads) ? Number(concurrency.threads) : DEFAULT_THREADS,
+    bigFileMB: Number.isFinite(concurrency?.bigFileMB) ? Number(concurrency.bigFileMB) : DEFAULT_BIGFILE_MB,
+    fileCountThreshold: Number.isFinite(concurrency?.fileCountThreshold)
+      ? Number(concurrency.fileCountThreshold)
+      : DEFAULT_FILECOUNT_THRESHOLD,
+  };
+}
+
+class WorkerPool {
+  constructor(size, workerPath) {
+    this.size = Math.max(1, size);
+    this.workerPath = workerPath;
+    this.workers = [];
+    this.queue = [];
+    this.idle = [];
+    this.taskId = 0;
+    this.pending = new Map();
+    for (let i = 0; i < this.size; i += 1) {
+      this.spawnWorker();
+    }
+  }
+
+  spawnWorker() {
+    const worker = new Worker(this.workerPath);
+    worker.on("message", (msg) => {
+      const task = this.pending.get(msg.id);
+      if (task) {
+        this.pending.delete(msg.id);
+        task.resolve(msg);
+      }
+      this.idle.push(worker);
+      this.runNext();
+    });
+    worker.on("error", (err) => {
+      for (const [id, task] of this.pending.entries()) {
+        task.reject(err);
+        this.pending.delete(id);
+      }
+    });
+    this.idle.push(worker);
+    this.workers.push(worker);
+  }
+
+  runTask(payload) {
+    return new Promise((resolve, reject) => {
+      const id = ++this.taskId;
+      this.queue.push({ id, payload, resolve, reject });
+      this.runNext();
+    });
+  }
+
+  runNext() {
+    if (!this.idle.length || !this.queue.length) return;
+    const worker = this.idle.shift();
+    const task = this.queue.shift();
+    this.pending.set(task.id, task);
+    worker.postMessage({ id: task.id, ...task.payload });
+  }
+
+  async close() {
+    await Promise.all(this.workers.map((w) => w.terminate()));
+  }
+}
+async function collectFromGitIndex(repoRoot, excludeMatcher, onProgress, stats, concurrency) {
   const nameStatusRaw = runGit(repoRoot, ["diff", "--cached", "--name-status", "-z"], {
     text: false,
   });
@@ -317,7 +452,18 @@ function collectFromGitIndex(repoRoot, excludeMatcher, onProgress, stats) {
       })
     : staged;
 
-  return filtered.map((item, idx) => {
+  const workerPath = path.join(__dirname, "workers", "compress-worker.js");
+  let pool = null;
+  const bigFileBytes = concurrency.bigFileMB * 1024 * 1024;
+  const usePoolByCount = concurrency.enabled && filtered.length >= concurrency.fileCountThreshold;
+  const getPool = () => {
+    if (!pool) {
+      pool = new WorkerPool(concurrency.threads, workerPath);
+    }
+    return pool;
+  };
+
+  const results = await Promise.all(filtered.map(async (item, idx) => {
     const startedAt = process.hrtime.bigint();
     const record = {
       k: item.kind,
@@ -327,10 +473,14 @@ function collectFromGitIndex(repoRoot, excludeMatcher, onProgress, stats) {
 
     if (item.kind === "D") {
       if (onProgress) {
-        const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
-        onProgress(item, idx + 1, filtered.length, 0, 0, durationMs);
+        onProgress(item, idx + 1, filtered.length, 0, 0, 0, "processing");
       }
-      return packItem(record);
+      const packed = packItem(record);
+      if (onProgress) {
+        const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+        onProgress(item, idx + 1, filtered.length, 0, 0, durationMs, "done");
+      }
+      return packed;
     }
 
     const meta = getIndexEntryMeta(repoRoot, item.path);
@@ -341,10 +491,14 @@ function collectFromGitIndex(repoRoot, excludeMatcher, onProgress, stats) {
     if (record.m === "160000") {
       record.sm = 1;
       if (onProgress) {
-        const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
-        onProgress(item, idx + 1, filtered.length, 0, 0, durationMs);
+        onProgress(item, idx + 1, filtered.length, 0, 0, 0, "processing");
       }
-      return packItem(record);
+      const packed = packItem(record);
+      if (onProgress) {
+        const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+        onProgress(item, idx + 1, filtered.length, 0, 0, durationMs, "done");
+      }
+      return packed;
     }
 
     const content = runGit(repoRoot, ["show", `:${item.path}`], { text: false });
@@ -355,13 +509,26 @@ function collectFromGitIndex(repoRoot, excludeMatcher, onProgress, stats) {
         stats.rawBytes += content.length;
       }
       if (onProgress) {
-        const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
-        onProgress(item, idx + 1, filtered.length, content.length, 0, durationMs);
+        onProgress(item, idx + 1, filtered.length, content.length, 0, 0, "processing");
       }
-      return packItem(record);
+      const packed = packItem(record);
+      if (onProgress) {
+        const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+        onProgress(item, idx + 1, filtered.length, content.length, 0, durationMs, "done");
+      }
+      return packed;
     }
 
-    const compressed = brotliCompress(content);
+    if (onProgress) {
+      onProgress(item, idx + 1, filtered.length, content.length, 0, 0, "processing");
+    }
+    let compressed;
+    if (concurrency.enabled && (usePoolByCount || content.length >= bigFileBytes)) {
+      const { buffer } = await getPool().runTask({ buffer: content });
+      compressed = Buffer.from(buffer);
+    } else {
+      compressed = brotliCompress(content);
+    }
     record.ce = "br";
     record.c = compressed.toString("base64");
     if (stats) {
@@ -370,20 +537,33 @@ function collectFromGitIndex(repoRoot, excludeMatcher, onProgress, stats) {
     }
     if (onProgress) {
       const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
-      onProgress(item, idx + 1, filtered.length, content.length, compressed.length, durationMs);
+      onProgress(item, idx + 1, filtered.length, content.length, compressed.length, durationMs, "done");
     }
 
     return packItem(record);
-  });
+  }));
+
+  if (pool) {
+    await pool.close();
+  }
+  return results;
 }
 
-function collectFromFs(rootAbs, outputAbs, excludeMatcher, onProgress, stats) {
+async function collectFromFs(rootAbs, outputAbs, excludeMatcher, onProgress, stats, concurrency) {
   const items = [];
   const outputResolved = outputAbs ? path.resolve(outputAbs) : null;
   let fileIndex = 0;
   let fileTotal = 0;
+  const workerPath = path.join(__dirname, "workers", "compress-worker.js");
+  const bigFileBytes = concurrency.bigFileMB * 1024 * 1024;
+  let pool = null;
+  let usePoolByCount = false;
+  const getPool = () => {
+    if (!pool) pool = new WorkerPool(concurrency.threads, workerPath);
+    return pool;
+  };
 
-  function walk(relDir) {
+  async function walk(relDir) {
     const absDir = relDir ? path.join(rootAbs, relDir) : rootAbs;
     const entries = fs.readdirSync(absDir, { withFileTypes: true });
     for (const entry of entries) {
@@ -396,7 +576,7 @@ function collectFromFs(rootAbs, outputAbs, excludeMatcher, onProgress, stats) {
       }
 
       if (entry.isDirectory()) {
-        walk(relPath);
+        await walk(relPath);
         continue;
       }
 
@@ -414,10 +594,13 @@ function collectFromFs(rootAbs, outputAbs, excludeMatcher, onProgress, stats) {
         }
         if (onProgress) {
           fileIndex += 1;
-          const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
-          onProgress({ kind: "A", path: relPath }, fileIndex, fileTotal, Buffer.byteLength(target, "utf8"), 0, durationMs);
+          onProgress({ kind: "A", path: relPath }, fileIndex, fileTotal, Buffer.byteLength(target, "utf8"), 0, 0, "processing");
         }
         items.push(packItem(record));
+        if (onProgress) {
+          const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+          onProgress({ kind: "A", path: relPath }, fileIndex, fileTotal, Buffer.byteLength(target, "utf8"), 0, durationMs, "done");
+        }
         continue;
       }
 
@@ -430,7 +613,13 @@ function collectFromFs(rootAbs, outputAbs, excludeMatcher, onProgress, stats) {
           p: relPath,
           m: stat.mode.toString(8),
         };
-        const compressed = brotliCompress(content);
+        let compressed;
+        if (concurrency.enabled && (usePoolByCount || content.length >= bigFileBytes)) {
+          const { buffer } = await getPool().runTask({ buffer: content });
+          compressed = Buffer.from(buffer);
+        } else {
+          compressed = brotliCompress(content);
+        }
         record.ce = "br";
         record.c = compressed.toString("base64");
         if (stats) {
@@ -439,15 +628,18 @@ function collectFromFs(rootAbs, outputAbs, excludeMatcher, onProgress, stats) {
         }
         if (onProgress) {
           fileIndex += 1;
+          onProgress({ kind: "A", path: relPath }, fileIndex, fileTotal, content.length, 0, 0, "processing");
+        }
+        if (onProgress) {
           const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
-          onProgress({ kind: "A", path: relPath }, fileIndex, fileTotal, content.length, compressed.length, durationMs);
+          onProgress({ kind: "A", path: relPath }, fileIndex, fileTotal, content.length, compressed.length, durationMs, "done");
         }
         items.push(packItem(record));
       }
     }
   }
 
-  if (onProgress) {
+  if (onProgress || (concurrency.enabled && concurrency.fileCountThreshold > 0)) {
     const countFiles = (dir) => {
       const entries = fs.readdirSync(dir, { withFileTypes: true });
       let count = 0;
@@ -466,16 +658,20 @@ function collectFromFs(rootAbs, outputAbs, excludeMatcher, onProgress, stats) {
       return count;
     };
     fileTotal = countFiles(rootAbs);
+    usePoolByCount = concurrency.enabled && fileTotal >= concurrency.fileCountThreshold;
   }
 
-  walk("");
+  await walk("");
+  if (pool) {
+    await pool.close();
+  }
   return items;
 }
 
-function buildBackup({ mode, root, outputAbs, repoRoot, excludeMatcher, excludes, onProgress, stats }) {
+async function buildBackup({ mode, root, outputAbs, repoRoot, excludeMatcher, excludes, onProgress, stats, concurrency }) {
   if (mode === "fs") {
     const rootAbs = path.resolve(root || process.cwd());
-    const files = collectFromFs(rootAbs, outputAbs, excludeMatcher, onProgress, stats);
+    const files = await collectFromFs(rootAbs, outputAbs, excludeMatcher, stats ? onProgress : null, stats, concurrency);
     return {
       version: 2,
       createdAt: new Date().toISOString(),
@@ -493,7 +689,7 @@ function buildBackup({ mode, root, outputAbs, repoRoot, excludeMatcher, excludes
 
   const gitCwd = root ? path.resolve(root) : process.cwd();
   const resolvedRepoRoot = repoRoot || runGit(gitCwd, ["rev-parse", "--show-toplevel"]).trim();
-  const files = collectFromGitIndex(resolvedRepoRoot, excludeMatcher, onProgress, stats);
+  const files = await collectFromGitIndex(resolvedRepoRoot, excludeMatcher, stats ? onProgress : null, stats, concurrency);
   return {
     version: 2,
     createdAt: new Date().toISOString(),
@@ -540,7 +736,7 @@ function tryCopyToClipboard(text) {
   return false;
 }
 
-function runBackup(options) {
+async function runBackup(options) {
   const mode = normalizeMode(options.from) || (options.root ? "fs" : "stash");
   let repoRoot = null;
   let rootForConfig = null;
@@ -572,6 +768,13 @@ function runBackup(options) {
     : loadConfig(rootForConfig);
   const { config, path: configPath } = configEntry;
   const excludes = normalizeExcludes(config?.excludes);
+  const concurrency = resolveConcurrencyConfig(config);
+  if (options.noConcurrency) {
+    concurrency.enabled = false;
+  }
+  if (options.threads) concurrency.threads = Number(options.threads);
+  if (options.bigFileMB) concurrency.bigFileMB = Number(options.bigFileMB);
+  if (options.fileCountThreshold) concurrency.fileCountThreshold = Number(options.fileCountThreshold);
   const excludeMatcher = buildExcludeMatcher(excludes);
   const pwEnv = options.pwEnv || resolveConfigPwEnv(config) || DEFAULT_PW_ENV;
   const configPassword = resolveConfigPassword(config);
@@ -590,29 +793,42 @@ function runBackup(options) {
     pwSource = "env";
   }
 
-  const onProgress = options.progress
-    ? (item, index, total, rawBytes, brBytes, durationMs) => {
+  const renderer = createProgressRenderer();
+  let rendererStarted = false;
+  const logProgress = options.progress
+    ? (item, index, total, rawBytes, brBytes, durationMs, status) => {
         const progress = backupMessages.progress || {};
-        const labelText = item.kind === "D" ? progress.delete : progress.backup;
-        const label = item.kind === "D"
-          ? colorize(labelText, COLORS.yellow)
-          : colorize(labelText, COLORS.cyan);
+        const statusText = status || "done";
+        const statusLabel = statusText.padEnd(10, " ");
+        const statusColor = statusText === "processing" ? COLORS.dim : COLORS.cyan;
         const count = total ? ` [${index}/${total}]` : "";
         const countLabel = colorize(count, COLORS.dim);
         const rawLabel = formatSize(rawBytes || 0).padStart(10, " ");
         const brLabel = (brBytes ? formatSize(brBytes) : "0.00 KB").padStart(10, " ");
         const pathLabel = String(item.path || "").padEnd(64, " ");
         const timeLabel = formatDuration(durationMs || 0).padStart(7, " ");
-        console.log(
-          `${label}${countLabel} ${colorize(pathLabel, COLORS.bold)} ` +
-            `${colorize(progress.size, COLORS.dim)}: ${rawLabel}   ${colorize(progress.br, COLORS.dim)}: ${brLabel}   ` +
-            `${colorize(progress.time, COLORS.dim)}: ${colorize(timeLabel, COLORS.green)}`,
-        );
+        const line = `${colorize(statusLabel, statusColor)}${countLabel} ${colorize(pathLabel, COLORS.bold)} ` +
+          `${colorize(progress.size, COLORS.dim)}: ${rawLabel}   ${colorize(progress.br, COLORS.dim)}: ${brLabel}   ` +
+          `${colorize(progress.time, COLORS.dim)}: ${colorize(timeLabel, COLORS.green)}`;
+        if (renderer && total) {
+          if (!rendererStarted) {
+            renderer.start(total);
+            rendererStarted = true;
+          }
+          renderer.update(index, line);
+        } else {
+          console.log(line);
+        }
+      }
+    : null;
+  const onProgress = logProgress
+    ? (item, index, total, rawBytes, brBytes, durationMs, status) => {
+        logProgress(item, index, total, rawBytes, brBytes, durationMs, status);
       }
     : null;
 
   const startAt = process.hrtime.bigint();
-  const backup = buildBackup({
+  const backup = await buildBackup({
     mode,
     root: options.root,
     outputAbs: mode === "fs" ? outputPath : null,
@@ -621,6 +837,7 @@ function runBackup(options) {
     excludes,
     onProgress,
     stats,
+    concurrency,
   });
 
   const { kb, encoded } = writeBackupFile({
@@ -632,6 +849,9 @@ function runBackup(options) {
 
   const outputLabel = path.relative(process.cwd(), outputPath);
   const summary = backupMessages.summary || {};
+  if (rendererStarted && renderer) {
+    renderer.stop();
+  }
   console.log(`${colorize(summary.file, COLORS.magenta)}：${outputLabel}`);
   if (stats.rawBytes > 0) {
     const rawKb = (stats.rawBytes / 1024).toFixed(2);
@@ -692,7 +912,10 @@ if (require.main === module) {
     if (options.help) {
       printHelp();
     } else {
-      runBackup(options);
+      Promise.resolve(runBackup(options)).catch((err) => {
+        console.error(err?.message || err);
+        process.exitCode = 1;
+      });
     }
   } catch (err) {
     console.error(err?.message || err);

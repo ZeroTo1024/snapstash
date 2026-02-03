@@ -23,6 +23,7 @@
     "config.js",
     "i18n.js",
     "i18n",
+    "workers",
     "README.md"
   ],
   "keywords": [
@@ -33,6 +34,10 @@
     "snapshot",
     "cli"
   ],
+  "dependencies": {
+    "ansi-escapes": "^6.2.0",
+    "log-update": "^5.0.0"
+  },
   "license": "UNLICENSED",
   "engines": {
     "node": ">=18"

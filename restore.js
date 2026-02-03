@@ -36,6 +36,42 @@ function colorize(text, color) {
   return `${color}${text}${COLORS.reset}`;
 }
 
+function createProgressRenderer() {
+  if (!process.stdout.isTTY) return null;
+  try {
+    const logUpdateModule = require("log-update");
+    const logUpdate = logUpdateModule?.default || logUpdateModule;
+    const ansiEscapes = require("ansi-escapes");
+    const hideCursor = ansiEscapes?.cursorHide || "";
+    const showCursor = ansiEscapes?.cursorShow || "";
+    let rows = [];
+    let active = true;
+
+    const start = (total) => {
+      rows = Array.from({ length: total }, () => "");
+      if (hideCursor) process.stdout.write(hideCursor);
+    };
+
+    const update = (index, line) => {
+      if (!active) return;
+      const i = Math.max(1, index) - 1;
+      rows[i] = line;
+      logUpdate(rows.join("\n"));
+    };
+
+    const stop = () => {
+      if (!active) return;
+      active = false;
+      logUpdate.done();
+      if (showCursor) process.stdout.write(showCursor);
+    };
+
+    return { start, update, stop };
+  } catch {
+    return null;
+  }
+}
+
 function resolveHelpLang() {
   try {
     const { config } = loadConfig(process.cwd());
@@ -259,6 +295,33 @@ function runRestore(options) {
   const items = backup.version === 2
     ? backup.data.map((value) => decodePayload(value, backup.payloadEncoding || "br"))
     : backup.data;
+  const total = items.length;
+  const renderer = createProgressRenderer();
+  let rendererStarted = false;
+  const emitProgress = (status, index, rawBytes, brBytes, durationMs, relPath) => {
+    if (!options.progress) return;
+    const statusText = status || "done";
+    const statusLabel = statusText.padEnd(10, " ");
+    const statusColor = statusText === "processing" ? COLORS.dim : COLORS.cyan;
+    const count = total ? ` [${index}/${total}]` : "";
+    const countLabel = colorize(count, COLORS.dim);
+    const rawLabel = formatSize(rawBytes || 0).padStart(10, " ");
+    const brLabel = (brBytes ? formatSize(brBytes) : "0.00 KB").padStart(10, " ");
+    const pathLabel = String(relPath || "").padEnd(64, " ");
+    const timeLabel = formatDuration(durationMs || 0).padStart(7, " ");
+    const line = `${colorize(statusLabel, statusColor)}${countLabel} ${colorize(pathLabel, COLORS.bold)} ` +
+      `${colorize(restoreMessages.progress.size, COLORS.dim)}: ${rawLabel}   ${colorize(restoreMessages.progress.br, COLORS.dim)}: ${brLabel}   ` +
+      `${colorize(restoreMessages.progress.time, COLORS.dim)}: ${colorize(timeLabel, COLORS.green)}`;
+    if (renderer) {
+      if (!rendererStarted) {
+        renderer.start(total);
+        rendererStarted = true;
+      }
+      renderer.update(index, line);
+    } else {
+      console.log(line);
+    }
+  };
 
   for (let i = 0; i < items.length; i += 1) {
     const startedAt = process.hrtime.bigint();
@@ -268,22 +331,17 @@ function runRestore(options) {
 
     const kind = item.k ?? item.kind;
     if (kind === "D") {
+      emitProgress("processing", i + 1, 0, 0, 0, relPath);
       removeIfExists(absPath);
       removed += 1;
-      if (options.progress) {
-        const count = items.length ? ` [${i + 1}/${items.length}]` : "";
-        const rawLabel = formatSize(0).padStart(10, " ");
-        const brLabel = formatSize(0).padStart(10, " ");
-        const pathLabel = String(relPath || "").padEnd(64, " ");
-        const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
-        const timeLabel = formatDuration(durationMs).padStart(7, " ");
-        console.log(
-          `${colorize(restoreMessages.progress.delete, COLORS.yellow)}${colorize(count, COLORS.dim)} ` +
-            `${colorize(pathLabel, COLORS.bold)} ${colorize(restoreMessages.progress.size, COLORS.dim)}: ${rawLabel}   ` +
-            `${colorize(restoreMessages.progress.br, COLORS.dim)}: ${brLabel}   ` +
-            `${colorize(restoreMessages.progress.time, COLORS.dim)}: ${colorize(timeLabel, COLORS.green)}`,
-        );
-      }
+      emitProgress(
+        "done",
+        i + 1,
+        0,
+        0,
+        Number(process.hrtime.bigint() - startedAt) / 1e6,
+        relPath,
+      );
       continue;
     }
 
@@ -306,22 +364,17 @@ function runRestore(options) {
       if (typeof target !== "string") {
         throw new Error(`symlink 缺少目标：${relPath}`);
       }
+      emitProgress("processing", i + 1, Buffer.byteLength(target, "utf8"), 0, 0, relPath);
       writeSymlink(absPath, target);
       restored += 1;
-      if (options.progress) {
-        const count = items.length ? ` [${i + 1}/${items.length}]` : "";
-        const rawLabel = formatSize(Buffer.byteLength(target, "utf8")).padStart(10, " ");
-        const brLabel = formatSize(0).padStart(10, " ");
-        const pathLabel = String(relPath || "").padEnd(64, " ");
-        const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
-        const timeLabel = formatDuration(durationMs).padStart(7, " ");
-        console.log(
-          `${colorize(restoreMessages.progress.restore, COLORS.cyan)}${colorize(count, COLORS.dim)} ` +
-            `${colorize(pathLabel, COLORS.bold)} ${colorize(restoreMessages.progress.size, COLORS.dim)}: ${rawLabel}   ` +
-            `${colorize(restoreMessages.progress.br, COLORS.dim)}: ${brLabel}   ` +
-            `${colorize(restoreMessages.progress.time, COLORS.dim)}: ${colorize(timeLabel, COLORS.green)}`,
-        );
-      }
+      emitProgress(
+        "done",
+        i + 1,
+        Buffer.byteLength(target, "utf8"),
+        0,
+        Number(process.hrtime.bigint() - startedAt) / 1e6,
+        relPath,
+      );
       continue;
     }
 
@@ -331,36 +384,32 @@ function runRestore(options) {
     }
 
     const content = item.c ? decodeContent(item) : Buffer.from(contentBase64, "base64");
+    emitProgress("processing", i + 1, content.length, 0, 0, relPath);
     ensureParentDir(absPath);
     fs.writeFileSync(absPath, content);
     tryChmod(absPath, mode);
     restored += 1;
-    if (options.progress) {
-      const rawBytes = content.length;
-      const brBytes = item.c ? Buffer.from(item.c, "base64").length : 0;
-      const rawLabel = formatSize(rawBytes || 0).padStart(10, " ");
-      const brLabel = (brBytes ? formatSize(brBytes) : "0.00 KB").padStart(10, " ");
-      const count = items.length ? ` [${i + 1}/${items.length}]` : "";
-      const pathLabel = String(relPath || "").padEnd(64, " ");
-      const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
-      const timeLabel = formatDuration(durationMs).padStart(7, " ");
-      console.log(
-        `${colorize(restoreMessages.progress.restore, COLORS.cyan)}${colorize(count, COLORS.dim)} ` +
-          `${colorize(pathLabel, COLORS.bold)} ${colorize(restoreMessages.progress.size, COLORS.dim)}: ${rawLabel}   ` +
-          `${colorize(restoreMessages.progress.br, COLORS.dim)}: ${brLabel}   ` +
-          `${colorize(restoreMessages.progress.time, COLORS.dim)}: ${colorize(timeLabel, COLORS.green)}`,
-      );
-    }
+    emitProgress(
+      "done",
+      i + 1,
+      content.length,
+      item.c ? Buffer.from(item.c, "base64").length : 0,
+      Number(process.hrtime.bigint() - startedAt) / 1e6,
+      relPath,
+    );
   }
 
+  if (rendererStarted && renderer) {
+    renderer.stop();
+  }
   const summary = restoreMessages.summary || {};
   const durationLabel = formatDuration(Number(process.hrtime.bigint() - startAt) / 1e6);
   console.log(
     lang === "zh"
       ? `${colorize(summary.done, COLORS.green)}: ${summary.add} ${restored}，${summary.del} ${removed}，${summary.skip} ${skipped}， ${summary.total} ${items.length || 0}（${summary.path}：${repoRoot}）`
       : `${colorize(summary.done, COLORS.green)}: ${summary.add} ${restored}, ${summary.del} ${removed}, ${summary.skip} ${skipped}, ${summary.total} ${items.length || 0} (${summary.path}: ${repoRoot})`,
-      `${colorize("Time", COLORS.dim)}: ${colorize(durationLabel, COLORS.green)}`
   );
+  console.log(`${colorize("Time", COLORS.dim)}: ${colorize(durationLabel, COLORS.green)}`);
 }
 
 function getBackupInfo(options) {
