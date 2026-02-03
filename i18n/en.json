@@ -5,8 +5,10 @@
       "options": "Options:",
       "output": "  --output, -o <file>   Output file (default {defaultBackupFile})",
       "encrypt": "  --encrypt             Enable encryption (AES-256-GCM)",
+      "noEncrypt": "  --no-encrypt, --plain  Disable encryption (even if config has password)",
       "pw": "  --pw <password>       Encryption password (optional, empty = compress only)",
       "pwEnv": "  --pw-env <ENV>         Password env name (default {defaultPwEnv})",
+      "config": "  --config <file>        Use config file",
       "clipboard": "  --clipboard, --c       Copy to clipboard",
       "noProgress": "  --no-progress          Disable progress logs",
       "root": "  --root, --dir <path>  Backup directory (filesystem mode)",
@@ -17,7 +19,8 @@
       "backup": "Backup",
       "delete": "Delete",
       "size": "size",
-      "br": "br"
+      "br": "br",
+      "time": "dur"
     },
     "summary": {
       "file": "Backup file path",
@@ -27,7 +30,11 @@
       "success": "Done",
       "entries": "entries",
       "pwMasked": "Encryption key",
-      "pwFromConfig": "(from config.json)"
+      "pwFromConfig": "(from {path})",
+      "reduction": "Reduction",
+      "savings": "Savings",
+      "fileSize": "Backup file size",
+      "overhead": "Overhead(base64)"
     },
     "clipboard": "Copied to clipboard"
   },
@@ -39,6 +46,7 @@
       "root": "  --root, --dir <path>   Restore directory (default cwd)",
       "pw": "  --pw <password>        Decryption password",
       "pwEnv": "  --pw-env <ENV>         Password env name (default {defaultPwEnv})",
+      "config": "  --config <file>        Use config file",
       "noProgress": "  --no-progress          Disable progress logs",
       "help": "  --help, -h             Show help"
     },
@@ -46,7 +54,8 @@
       "restore": "Restore",
       "delete": "Delete",
       "size": "size",
-      "br": "br"
+      "br": "br",
+      "time": "time"
     },
     "summary": {
       "done": "Done",
@@ -84,8 +93,10 @@
       "backupOptions": [
         "  --output, -o <file>   Output file (default {defaultBackupFile})",
         "  --encrypt             Enable encryption (AES-256-GCM)",
+        "  --no-encrypt, --plain  Disable encryption (even if config has password)",
         "  --pw <password>        Encryption password (optional, empty = compress only)",
         "  --pw-env <ENV>         Password env name (default {defaultPwEnv})",
+        "  --config <file>        Use config file",
         "  --clipboard, --c       Copy to clipboard",
         "  --no-progress          Disable progress logs",
         "  --root, --dir <path>   Backup directory (filesystem mode)",
@@ -96,6 +107,7 @@
         "  --root, --dir <path>   Restore directory (default cwd)",
         "  --pw <password>        Decryption password",
         "  --pw-env <ENV>         Password env name (default {defaultPwEnv})",
+        "  --config <file>        Use config file",
         "  --no-progress          Disable progress logs"
       ],
       "infoOptions": [
@@ -128,7 +140,8 @@
       "head": "head",
       "payloadEncoding": "payloadEncoding",
       "source": "source",
-      "items": "items"
+      "items": "items",
+      "encrypted": "encrypted"
     }
   }
 }

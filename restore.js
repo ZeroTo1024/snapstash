@@ -10,6 +10,7 @@ const { parseBackupText } = require("./backup-format");
 const { getMessages, formatMessage } = require("./i18n");
 const {
   loadConfig,
+  loadConfigAt,
   resolveConfigPassword,
   resolveConfigPwEnv,
   resolveConfigLang,
@@ -60,6 +61,7 @@ function printHelp() {
       formatMessage(help.root, vars),
       formatMessage(help.pw, vars),
       formatMessage(help.pwEnv, vars),
+      formatMessage(help.config, vars),
       formatMessage(help.noProgress, vars),
       formatMessage(help.help, vars),
     ].join("\n"),
@@ -72,6 +74,7 @@ function parseArgs(argv) {
     root: null,
     pw: null,
     pwEnv: null,
+    configPath: null,
     help: false,
     progress: true,
   };
@@ -95,6 +98,11 @@ function parseArgs(argv) {
     }
     if (arg === "--pw-env") {
       out.pwEnv = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === "--config") {
+      out.configPath = argv[i + 1];
       i += 1;
       continue;
     }
@@ -171,11 +179,20 @@ function formatSize(bytes) {
   return `${(bytes / 1024).toFixed(2)} KB`;
 }
 
+function formatDuration(ms) {
+  if (!Number.isFinite(ms)) return "0ms";
+  if (ms < 1000) return `${ms.toFixed(0)}ms`;
+  return `${(ms / 1000).toFixed(2)}s`;
+}
+
 function loadBackup(inputPath, options) {
   const raw = fs.readFileSync(inputPath, "utf8").trim();
   let backup;
   const rootForConfig = path.resolve(options.root || process.cwd());
-  const { config } = loadConfig(rootForConfig);
+  const configEntry = options.configPath
+    ? loadConfigAt(path.resolve(process.cwd(), options.configPath))
+    : loadConfig(rootForConfig);
+  const { config } = configEntry;
   const lang = resolveConfigLang(config) || "en";
   const messages = getMessages(lang);
   const restoreMessages = messages.restore || {};
@@ -221,7 +238,10 @@ function runRestore(options) {
       throw new Error(`${configDir} 已存在但不是目录，请手动处理`);
     }
   }
-  const { config } = loadConfig(rootForConfig);
+  const configEntry = options.configPath
+    ? loadConfigAt(path.resolve(process.cwd(), options.configPath))
+    : loadConfig(rootForConfig);
+  const { config } = configEntry;
   const lang = resolveConfigLang(config) || "en";
   const messages = getMessages(lang);
   const restoreMessages = messages.restore || {};
@@ -230,6 +250,7 @@ function runRestore(options) {
     : getDefaultBackupPath(rootForConfig);
   const backup = loadBackup(inputPath, options);
   const repoRoot = rootForConfig;
+  const startAt = process.hrtime.bigint();
 
   let restored = 0;
   let removed = 0;
@@ -240,25 +261,29 @@ function runRestore(options) {
     : backup.data;
 
   for (let i = 0; i < items.length; i += 1) {
+    const startedAt = process.hrtime.bigint();
     const item = items[i];
     const relPath = assertSafeRepoRelativePath(item.p ?? item.path);
     const absPath = path.resolve(repoRoot, relPath);
 
     const kind = item.k ?? item.kind;
     if (kind === "D") {
+      removeIfExists(absPath);
+      removed += 1;
       if (options.progress) {
         const count = items.length ? ` [${i + 1}/${items.length}]` : "";
         const rawLabel = formatSize(0).padStart(10, " ");
         const brLabel = formatSize(0).padStart(10, " ");
-        const pathLabel = String(relPath || "").padEnd(48, " ");
+        const pathLabel = String(relPath || "").padEnd(64, " ");
+        const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+        const timeLabel = formatDuration(durationMs).padStart(7, " ");
         console.log(
           `${colorize(restoreMessages.progress.delete, COLORS.yellow)}${colorize(count, COLORS.dim)} ` +
             `${colorize(pathLabel, COLORS.bold)} ${colorize(restoreMessages.progress.size, COLORS.dim)}: ${rawLabel}   ` +
-            `${colorize(restoreMessages.progress.br, COLORS.dim)}: ${brLabel}`,
+            `${colorize(restoreMessages.progress.br, COLORS.dim)}: ${brLabel}   ` +
+            `${colorize(restoreMessages.progress.time, COLORS.dim)}: ${colorize(timeLabel, COLORS.green)}`,
         );
       }
-      removeIfExists(absPath);
-      removed += 1;
       continue;
     }
 
@@ -281,19 +306,22 @@ function runRestore(options) {
       if (typeof target !== "string") {
         throw new Error(`symlink 缺少目标：${relPath}`);
       }
+      writeSymlink(absPath, target);
+      restored += 1;
       if (options.progress) {
         const count = items.length ? ` [${i + 1}/${items.length}]` : "";
         const rawLabel = formatSize(Buffer.byteLength(target, "utf8")).padStart(10, " ");
         const brLabel = formatSize(0).padStart(10, " ");
-        const pathLabel = String(relPath || "").padEnd(48, " ");
+        const pathLabel = String(relPath || "").padEnd(64, " ");
+        const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+        const timeLabel = formatDuration(durationMs).padStart(7, " ");
         console.log(
           `${colorize(restoreMessages.progress.restore, COLORS.cyan)}${colorize(count, COLORS.dim)} ` +
             `${colorize(pathLabel, COLORS.bold)} ${colorize(restoreMessages.progress.size, COLORS.dim)}: ${rawLabel}   ` +
-            `${colorize(restoreMessages.progress.br, COLORS.dim)}: ${brLabel}`,
+            `${colorize(restoreMessages.progress.br, COLORS.dim)}: ${brLabel}   ` +
+            `${colorize(restoreMessages.progress.time, COLORS.dim)}: ${colorize(timeLabel, COLORS.green)}`,
         );
       }
-      writeSymlink(absPath, target);
-      restored += 1;
       continue;
     }
 
@@ -303,30 +331,35 @@ function runRestore(options) {
     }
 
     const content = item.c ? decodeContent(item) : Buffer.from(contentBase64, "base64");
+    ensureParentDir(absPath);
+    fs.writeFileSync(absPath, content);
+    tryChmod(absPath, mode);
+    restored += 1;
     if (options.progress) {
       const rawBytes = content.length;
       const brBytes = item.c ? Buffer.from(item.c, "base64").length : 0;
       const rawLabel = formatSize(rawBytes || 0).padStart(10, " ");
       const brLabel = (brBytes ? formatSize(brBytes) : "0.00 KB").padStart(10, " ");
       const count = items.length ? ` [${i + 1}/${items.length}]` : "";
-      const pathLabel = String(relPath || "").padEnd(48, " ");
+      const pathLabel = String(relPath || "").padEnd(64, " ");
+      const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+      const timeLabel = formatDuration(durationMs).padStart(7, " ");
       console.log(
         `${colorize(restoreMessages.progress.restore, COLORS.cyan)}${colorize(count, COLORS.dim)} ` +
           `${colorize(pathLabel, COLORS.bold)} ${colorize(restoreMessages.progress.size, COLORS.dim)}: ${rawLabel}   ` +
-          `${colorize(restoreMessages.progress.br, COLORS.dim)}: ${brLabel}`,
+          `${colorize(restoreMessages.progress.br, COLORS.dim)}: ${brLabel}   ` +
+          `${colorize(restoreMessages.progress.time, COLORS.dim)}: ${colorize(timeLabel, COLORS.green)}`,
       );
     }
-    ensureParentDir(absPath);
-    fs.writeFileSync(absPath, content);
-    tryChmod(absPath, mode);
-    restored += 1;
   }
 
   const summary = restoreMessages.summary || {};
+  const durationLabel = formatDuration(Number(process.hrtime.bigint() - startAt) / 1e6);
   console.log(
     lang === "zh"
       ? `${colorize(summary.done, COLORS.green)}: ${summary.add} ${restored}，${summary.del} ${removed}，${summary.skip} ${skipped}， ${summary.total} ${items.length || 0}（${summary.path}：${repoRoot}）`
       : `${colorize(summary.done, COLORS.green)}: ${summary.add} ${restored}, ${summary.del} ${removed}, ${summary.skip} ${skipped}, ${summary.total} ${items.length || 0} (${summary.path}: ${repoRoot})`,
+      `${colorize("Time", COLORS.dim)}: ${colorize(durationLabel, COLORS.green)}`
   );
 }
 
@@ -335,6 +368,8 @@ function getBackupInfo(options) {
   const inputPath = options.input
     ? path.resolve(process.cwd(), options.input)
     : getDefaultBackupPath(rootForConfig);
+  const raw = fs.readFileSync(inputPath, "utf8").trim();
+  const encrypted = !raw.startsWith("{") && !raw.startsWith("SSP1:");
   const backup = loadBackup(inputPath, options);
   return {
     version: backup.version,
@@ -344,6 +379,7 @@ function getBackupInfo(options) {
     payloadEncoding: backup.payloadEncoding,
     source: backup.source,
     items: Array.isArray(backup.data) ? backup.data.length : 0,
+    encrypted,
   };
 }
 

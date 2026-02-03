@@ -1,4 +1,5 @@
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
 const DEFAULT_CONFIG_DIR = ".snapstash";
@@ -40,6 +41,10 @@ function getDefaultBackupPath(rootAbs) {
   return path.join(getConfigDir(rootAbs), DEFAULT_BACKUP_NAME);
 }
 
+function getGlobalConfigPath() {
+  return path.join(os.homedir(), DEFAULT_CONFIG_DIR, DEFAULT_CONFIG_FILE);
+}
+
 function globToRegExp(pattern) {
   let escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   escaped = escaped.replace(/\\\*\\\*/g, ".*");
@@ -72,19 +77,19 @@ function buildExcludeMatcher(excludes) {
 function loadConfig(rootAbs) {
   const configPath = getConfigPath(rootAbs);
   if (!fs.existsSync(configPath)) {
-    const legacyPath = path.join(rootAbs, DEFAULT_CONFIG_DIR);
-    if (fs.existsSync(legacyPath) && fs.statSync(legacyPath).isFile()) {
-      const raw = fs.readFileSync(legacyPath, "utf8");
+    const globalPath = getGlobalConfigPath();
+    if (fs.existsSync(globalPath)) {
+      const raw = fs.readFileSync(globalPath, "utf8");
       let config;
       try {
         config = JSON.parse(raw);
       } catch (err) {
-        throw new Error(`无法解析 ${legacyPath}: ${err?.message || err}`);
+        throw new Error(`无法解析 ${globalPath}: ${err?.message || err}`);
       }
       if (!config || typeof config !== "object" || Array.isArray(config)) {
-        throw new Error(`配置格式不正确: ${legacyPath}`);
+        throw new Error(`配置格式不正确: ${globalPath}`);
       }
-      return { path: legacyPath, config };
+      return { path: globalPath, config };
     }
     return { path: configPath, config: null };
   }
@@ -128,6 +133,24 @@ function resolveConfigLang(config) {
   return null;
 }
 
+function loadConfigAt(configPathAbs) {
+  const resolved = path.resolve(configPathAbs);
+  if (!fs.existsSync(resolved)) {
+    throw new Error(`配置文件不存在: ${resolved}`);
+  }
+  const raw = fs.readFileSync(resolved, "utf8");
+  let config;
+  try {
+    config = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`无法解析 ${resolved}: ${err?.message || err}`);
+  }
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    throw new Error(`配置格式不正确: ${resolved}`);
+  }
+  return { path: resolved, config };
+}
+
 module.exports = {
   DEFAULT_CONFIG_DIR,
   DEFAULT_CONFIG_FILE,
@@ -138,7 +161,9 @@ module.exports = {
   normalizeExcludes,
   buildExcludeMatcher,
   loadConfig,
+  loadConfigAt,
   resolveConfigPassword,
   resolveConfigPwEnv,
   resolveConfigLang,
+  getGlobalConfigPath,
 };

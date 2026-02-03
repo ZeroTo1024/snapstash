@@ -5,8 +5,10 @@
       "options": "选项：",
       "output": "  --output, -o <file>   输出文件 (默认 {defaultBackupFile})",
       "encrypt": "  --encrypt             启用加密 (AES-256-GCM)",
+      "noEncrypt": "  --no-encrypt, --plain  禁用加密 (即使配置中有 password)",
       "pw": "  --pw <password>       加密密码 (可选，不填则仅压缩)",
       "pwEnv": "  --pw-env <ENV>         密码环境变量名 (默认 {defaultPwEnv})",
+      "config": "  --config <file>        指定配置文件",
       "clipboard": "  --clipboard, --c       复制到剪贴板",
       "noProgress": "  --no-progress          关闭进度日志",
       "root": "  --root, --dir <path>  备份目录 (使用文件系统模式)",
@@ -17,7 +19,8 @@
       "backup": "完成",
       "delete": "删除",
       "size": "size",
-      "br": "br"
+      "br": "br",
+      "time": "dur"
     },
     "summary": {
       "file": "文件路径",
@@ -27,7 +30,11 @@
       "success": "执行成功",
       "entries": "个条目",
       "pwMasked": "加密秘钥",
-      "pwFromConfig": "(from config.json)"
+      "pwFromConfig": "(from {path})",
+      "reduction": "压缩率",
+      "savings": "体积节省",
+      "fileSize": "备份文件大小",
+      "overhead": "额外开销(base64)"
     },
     "clipboard": "已复制到剪贴板"
   },
@@ -39,6 +46,7 @@
       "root": "  --root, --dir <path>   恢复目录 (默认当前目录)",
       "pw": "  --pw <password>        解密密码",
       "pwEnv": "  --pw-env <ENV>         密码环境变量名 (默认 {defaultPwEnv})",
+      "config": "  --config <file>        指定配置文件",
       "noProgress": "  --no-progress          关闭进度日志",
       "help": "  --help, -h             显示帮助"
     },
@@ -46,7 +54,8 @@
       "restore": "恢复",
       "delete": "删除",
       "size": "size",
-      "br": "br"
+      "br": "br",
+      "time": "耗时"
     },
     "summary": {
       "done": "执行成功",
@@ -84,8 +93,10 @@
       "backupOptions": [
         "  --output, -o <file>   输出文件 (默认 {defaultBackupFile})",
         "  --encrypt             启用加密 (AES-256-GCM)",
+        "  --no-encrypt, --plain  禁用加密 (即使配置中有 password)",
         "  --pw <password>        加密密码 (可选，不填则仅压缩)",
         "  --pw-env <ENV>         密码环境变量名 (默认 {defaultPwEnv})",
+        "  --config <file>        指定配置文件",
         "  --clipboard, --c       复制到剪贴板",
         "  --no-progress          关闭进度日志",
         "  --root, --dir <path>   备份目录 (使用文件系统模式)",
@@ -96,6 +107,7 @@
         "  --root, --dir <path>   恢复目录 (默认当前目录)",
         "  --pw <password>        解密密码",
         "  --pw-env <ENV>         密码环境变量名 (默认 {defaultPwEnv})",
+        "  --config <file>        指定配置文件",
         "  --no-progress          关闭进度日志"
       ],
       "infoOptions": [
@@ -128,7 +140,8 @@
       "head": "head",
       "payloadEncoding": "payloadEncoding",
       "source": "source",
-      "items": "items"
+      "items": "items",
+      "encrypted": "encrypted"
     }
   }
 }

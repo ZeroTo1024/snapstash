@@ -76,6 +76,8 @@ function parseBackupArgs(argv) {
     pw: null,
     pwProvided: false,
     pwEnv: null,
+    noEncrypt: false,
+    configPath: null,
     root: null,
     from: null,
     help: false,
@@ -102,6 +104,10 @@ function parseBackupArgs(argv) {
       out.encrypt = true;
       continue;
     }
+    if (arg === "--no-encrypt" || arg === "--plain") {
+      out.noEncrypt = true;
+      continue;
+    }
     if (arg === "--pw") {
       out.pwProvided = true;
       const next = argv[i + 1];
@@ -113,6 +119,11 @@ function parseBackupArgs(argv) {
     }
     if (arg === "--pw-env") {
       out.pwEnv = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === "--config") {
+      out.configPath = argv[i + 1];
       i += 1;
       continue;
     }
@@ -150,6 +161,7 @@ function parseRestoreArgs(argv) {
     root: null,
     pw: null,
     pwEnv: null,
+    configPath: null,
     help: false,
     progress: true,
   };
@@ -173,6 +185,11 @@ function parseRestoreArgs(argv) {
     }
     if (arg === "--pw-env") {
       out.pwEnv = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === "--config") {
+      out.configPath = argv[i + 1];
       i += 1;
       continue;
     }
@@ -395,6 +412,7 @@ function main() {
         `${infoMessages.repoRoot}: ${info.repoRoot ?? ""}`,
         `${infoMessages.head}: ${info.head ?? ""}`,
         `${infoMessages.payloadEncoding}: ${info.payloadEncoding ?? ""}`,
+        `${infoMessages.encrypted}: ${info.encrypted ? "true" : "false"}`,
         `${infoMessages.source}: ${info.source?.mode ?? ""}${info.source?.root ? ` (${info.source.root})` : ""}`,
         `${infoMessages.items}: ${info.items ?? 0}`,
       ].join("\n"),

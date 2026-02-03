@@ -16,6 +16,7 @@ const {
   resolveConfigPassword,
   resolveConfigPwEnv,
   resolveConfigLang,
+  loadConfigAt,
   DEFAULT_CONFIG_DIR,
   DEFAULT_BACKUP_NAME,
   getDefaultBackupPath,
@@ -64,8 +65,10 @@ function printHelp() {
       formatMessage(help.options, vars),
       formatMessage(help.output, vars),
       formatMessage(help.encrypt, vars),
+      formatMessage(help.noEncrypt, vars),
       formatMessage(help.pw, vars),
       formatMessage(help.pwEnv, vars),
+      formatMessage(help.config, vars),
       formatMessage(help.clipboard, vars),
       formatMessage(help.noProgress, vars),
       formatMessage(help.root, vars),
@@ -83,6 +86,8 @@ function parseArgs(argv) {
     pw: null,
     pwProvided: false,
     pwEnv: null,
+    noEncrypt: false,
+    configPath: null,
     root: null,
     from: null,
     help: false,
@@ -109,6 +114,10 @@ function parseArgs(argv) {
       out.encrypt = true;
       continue;
     }
+    if (arg === "--no-encrypt" || arg === "--plain") {
+      out.noEncrypt = true;
+      continue;
+    }
     if (arg === "--pw") {
       out.pwProvided = true;
       const next = argv[i + 1];
@@ -120,6 +129,11 @@ function parseArgs(argv) {
     }
     if (arg === "--pw-env") {
       out.pwEnv = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === "--config") {
+      out.configPath = argv[i + 1];
       i += 1;
       continue;
     }
@@ -283,6 +297,12 @@ function maskSecret(value) {
   return `${text[0]}***${text[text.length - 1]}`;
 }
 
+function formatDuration(ms) {
+  if (!Number.isFinite(ms)) return "0ms";
+  if (ms < 1000) return `${ms.toFixed(0)}ms`;
+  return `${(ms / 1000).toFixed(2)}s`;
+}
+
 function collectFromGitIndex(repoRoot, excludeMatcher, onProgress, stats) {
   const nameStatusRaw = runGit(repoRoot, ["diff", "--cached", "--name-status", "-z"], {
     text: false,
@@ -298,6 +318,7 @@ function collectFromGitIndex(repoRoot, excludeMatcher, onProgress, stats) {
     : staged;
 
   return filtered.map((item, idx) => {
+    const startedAt = process.hrtime.bigint();
     const record = {
       k: item.kind,
       p: item.path,
@@ -306,7 +327,8 @@ function collectFromGitIndex(repoRoot, excludeMatcher, onProgress, stats) {
 
     if (item.kind === "D") {
       if (onProgress) {
-        onProgress(item, idx + 1, filtered.length, 0, 0);
+        const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+        onProgress(item, idx + 1, filtered.length, 0, 0, durationMs);
       }
       return packItem(record);
     }
@@ -319,7 +341,8 @@ function collectFromGitIndex(repoRoot, excludeMatcher, onProgress, stats) {
     if (record.m === "160000") {
       record.sm = 1;
       if (onProgress) {
-        onProgress(item, idx + 1, filtered.length, 0, 0);
+        const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+        onProgress(item, idx + 1, filtered.length, 0, 0, durationMs);
       }
       return packItem(record);
     }
@@ -332,7 +355,8 @@ function collectFromGitIndex(repoRoot, excludeMatcher, onProgress, stats) {
         stats.rawBytes += content.length;
       }
       if (onProgress) {
-        onProgress(item, idx + 1, filtered.length, content.length, 0);
+        const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+        onProgress(item, idx + 1, filtered.length, content.length, 0, durationMs);
       }
       return packItem(record);
     }
@@ -345,7 +369,8 @@ function collectFromGitIndex(repoRoot, excludeMatcher, onProgress, stats) {
       stats.compressedBytes += compressed.length;
     }
     if (onProgress) {
-      onProgress(item, idx + 1, filtered.length, content.length, compressed.length);
+      const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+      onProgress(item, idx + 1, filtered.length, content.length, compressed.length, durationMs);
     }
 
     return packItem(record);
@@ -376,6 +401,7 @@ function collectFromFs(rootAbs, outputAbs, excludeMatcher, onProgress, stats) {
       }
 
       if (entry.isSymbolicLink()) {
+        const startedAt = process.hrtime.bigint();
         const target = fs.readlinkSync(absPath, "utf8");
         const record = {
           k: "A",
@@ -388,13 +414,15 @@ function collectFromFs(rootAbs, outputAbs, excludeMatcher, onProgress, stats) {
         }
         if (onProgress) {
           fileIndex += 1;
-          onProgress({ kind: "A", path: relPath }, fileIndex, fileTotal, Buffer.byteLength(target, "utf8"), 0);
+          const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+          onProgress({ kind: "A", path: relPath }, fileIndex, fileTotal, Buffer.byteLength(target, "utf8"), 0, durationMs);
         }
         items.push(packItem(record));
         continue;
       }
 
       if (entry.isFile()) {
+        const startedAt = process.hrtime.bigint();
         const stat = fs.statSync(absPath);
         const content = fs.readFileSync(absPath);
         const record = {
@@ -411,7 +439,8 @@ function collectFromFs(rootAbs, outputAbs, excludeMatcher, onProgress, stats) {
         }
         if (onProgress) {
           fileIndex += 1;
-          onProgress({ kind: "A", path: relPath }, fileIndex, fileTotal, content.length, compressed.length);
+          const durationMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+          onProgress({ kind: "A", path: relPath }, fileIndex, fileTotal, content.length, compressed.length, durationMs);
         }
         items.push(packItem(record));
       }
@@ -538,7 +567,10 @@ function runBackup(options) {
     ? path.resolve(process.cwd(), options.output)
     : defaultOutput;
 
-  const { config } = loadConfig(rootForConfig);
+  const configEntry = options.configPath
+    ? loadConfigAt(path.resolve(process.cwd(), options.configPath))
+    : loadConfig(rootForConfig);
+  const { config, path: configPath } = configEntry;
   const excludes = normalizeExcludes(config?.excludes);
   const excludeMatcher = buildExcludeMatcher(excludes);
   const pwEnv = options.pwEnv || resolveConfigPwEnv(config) || DEFAULT_PW_ENV;
@@ -548,19 +580,18 @@ function runBackup(options) {
   const backupMessages = messages.backup || {};
 
   const password = resolvePassword(options.pw || configPassword, pwEnv);
+  const encryptPassword = options.noEncrypt ? null : password;
   let pwSource = null;
-  if (options.pwProvided) {
-    if (options.pw) {
-      pwSource = "arg";
-    } else if (configPassword) {
-      pwSource = "config";
-    } else if (pwEnv && process.env[pwEnv]) {
-      pwSource = "env";
-    }
+  if (options.pw) {
+    pwSource = "arg";
+  } else if (configPassword) {
+    pwSource = "config";
+  } else if (pwEnv && process.env[pwEnv]) {
+    pwSource = "env";
   }
 
   const onProgress = options.progress
-    ? (item, index, total, rawBytes, brBytes) => {
+    ? (item, index, total, rawBytes, brBytes, durationMs) => {
         const progress = backupMessages.progress || {};
         const labelText = item.kind === "D" ? progress.delete : progress.backup;
         const label = item.kind === "D"
@@ -570,14 +601,17 @@ function runBackup(options) {
         const countLabel = colorize(count, COLORS.dim);
         const rawLabel = formatSize(rawBytes || 0).padStart(10, " ");
         const brLabel = (brBytes ? formatSize(brBytes) : "0.00 KB").padStart(10, " ");
-        const pathLabel = String(item.path || "").padEnd(48, " ");
+        const pathLabel = String(item.path || "").padEnd(64, " ");
+        const timeLabel = formatDuration(durationMs || 0).padStart(7, " ");
         console.log(
           `${label}${countLabel} ${colorize(pathLabel, COLORS.bold)} ` +
-            `${colorize(progress.size, COLORS.dim)}: ${rawLabel}   ${colorize(progress.br, COLORS.dim)}: ${brLabel}`,
+            `${colorize(progress.size, COLORS.dim)}: ${rawLabel}   ${colorize(progress.br, COLORS.dim)}: ${brLabel}   ` +
+            `${colorize(progress.time, COLORS.dim)}: ${colorize(timeLabel, COLORS.green)}`,
         );
       }
     : null;
 
+  const startAt = process.hrtime.bigint();
   const backup = buildBackup({
     mode,
     root: options.root,
@@ -592,8 +626,9 @@ function runBackup(options) {
   const { kb, encoded } = writeBackupFile({
     outputPath,
     backup,
-    password,
+    password: encryptPassword,
   });
+  const backupFileBytes = Number(kb) * 1024;
 
   const outputLabel = path.relative(process.cwd(), outputPath);
   const summary = backupMessages.summary || {};
@@ -602,19 +637,39 @@ function runBackup(options) {
     const rawKb = (stats.rawBytes / 1024).toFixed(2);
     const compKb = (stats.compressedBytes / 1024).toFixed(2);
     const ratio = ((stats.compressedBytes / stats.rawBytes) * 100).toFixed(2);
+    const reduced = (100 - Number(ratio)).toFixed(2);
+    const savedKb = ((stats.rawBytes - stats.compressedBytes) / 1024).toFixed(2);
+    const savedLabel = `[${savedKb}kb ↓]`;
+    const reducedLabel = `[${reduced}% ↓]`;
     console.log(
       `${colorize(summary.raw, COLORS.dim)}：${rawKb} KB，` +
-        `${colorize(summary.compressed, COLORS.dim)}：${compKb} KB，` +
-        `${colorize(summary.ratio, COLORS.dim)}：${ratio}%`,
+        `${colorize(summary.compressed, COLORS.dim)}：${compKb} KB ` +
+        `${colorize(savedLabel, COLORS.green)}，` +
+        `${colorize(summary.ratio, COLORS.dim)}：${ratio}% ` +
+        `${colorize(reducedLabel, COLORS.green)}`,
     );
+    if (Number.isFinite(backupFileBytes) && stats.compressedBytes > 0) {
+      const fileKb = (backupFileBytes / 1024).toFixed(2);
+      const overheadBytes = Math.max(backupFileBytes - stats.compressedBytes, 0);
+      const overheadKb = (overheadBytes / 1024).toFixed(2);
+      const overheadRatio = ((overheadBytes / stats.compressedBytes) * 100).toFixed(2);
+      console.log(
+        `${colorize(summary.fileSize, COLORS.dim)}：${fileKb} KB，` +
+          `${colorize(summary.overhead, COLORS.dim)}：${colorize(`${overheadKb}kb (${overheadRatio}%)`, COLORS.green)}`,
+      );
+    }
   }
+  const durationLabel = formatDuration(Number(process.hrtime.bigint() - startAt) / 1e6);
   console.log(
     `${colorize(summary.success, COLORS.green)}：${outputLabel}（${backup.data.length} ${summary.entries}，${kb} KB）`,
+    `${colorize("Time", COLORS.dim)}: ${colorize(durationLabel, COLORS.green)}`
   );
-  if (options.pwProvided && password) {
+  if (!options.noEncrypt && encryptPassword && (pwSource === "config" || pwSource === "arg")) {
     const label = summary.pwMasked || "Encryption key";
     const masked = maskSecret(password);
-    const suffix = pwSource === "config" ? ` ${summary.pwFromConfig || "(from config.json)"}` : "";
+    const suffix = pwSource === "config"
+      ? ` ${formatMessage(summary.pwFromConfig || "(from {path})", { path: configPath || "config.json" })}`
+      : "";
     console.log(`${colorize(label, COLORS.yellow)}: ${colorize(masked, COLORS.bold)}${suffix}`);
   }
 
