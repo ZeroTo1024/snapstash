@@ -25,7 +25,8 @@
       "compressed": "Compressed",
       "ratio": "Ratio",
       "success": "Done",
-      "entries": "entries"
+      "entries": "entries",
+      "pwMasked": "Encryption key"
     },
     "clipboard": "Copied to clipboard"
   },

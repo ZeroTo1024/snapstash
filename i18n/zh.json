@@ -25,7 +25,8 @@
       "compressed": "压缩后",
       "ratio": "压缩比",
       "success": "执行成功",
-      "entries": "个条目"
+      "entries": "个条目",
+      "pwMasked": "加密秘钥"
     },
     "clipboard": "已复制到剪贴板"
   },

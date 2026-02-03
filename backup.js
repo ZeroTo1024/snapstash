@@ -81,6 +81,7 @@ function parseArgs(argv) {
     pretty: false,
     encrypt: false,
     pw: null,
+    pwProvided: false,
     pwEnv: null,
     root: null,
     from: null,
@@ -109,8 +110,12 @@ function parseArgs(argv) {
       continue;
     }
     if (arg === "--pw") {
-      out.pw = argv[i + 1];
-      i += 1;
+      out.pwProvided = true;
+      const next = argv[i + 1];
+      if (next && !next.startsWith("-")) {
+        out.pw = next;
+        i += 1;
+      }
       continue;
     }
     if (arg === "--pw-env") {
@@ -269,6 +274,13 @@ function normalizeMode(value) {
 function formatSize(bytes) {
   if (!Number.isFinite(bytes)) return "0.00 KB";
   return `${(bytes / 1024).toFixed(2)} KB`;
+}
+
+function maskSecret(value) {
+  if (!value) return "";
+  const text = String(value);
+  if (text.length === 1) return `${text}***${text}`;
+  return `${text[0]}***${text[text.length - 1]}`;
 }
 
 function collectFromGitIndex(repoRoot, excludeMatcher, onProgress, stats) {
@@ -589,6 +601,11 @@ function runBackup(options) {
   console.log(
     `${colorize(summary.success, COLORS.green)}：${outputLabel}（${backup.data.length} ${summary.entries}，${kb} KB）`,
   );
+  if (options.pwProvided && password) {
+    const label = summary.pwMasked || "Encryption key";
+    const masked = maskSecret(password);
+    console.log(`${colorize(label, COLORS.yellow)}: ${colorize(masked, COLORS.bold)}`);
+  }
 
   if (options.copy) {
     const copied = tryCopyToClipboard(encoded);

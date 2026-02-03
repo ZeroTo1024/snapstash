@@ -74,6 +74,7 @@ function parseBackupArgs(argv) {
     pretty: false,
     encrypt: false,
     pw: null,
+    pwProvided: false,
     pwEnv: null,
     root: null,
     from: null,
@@ -102,8 +103,12 @@ function parseBackupArgs(argv) {
       continue;
     }
     if (arg === "--pw") {
-      out.pw = argv[i + 1];
-      i += 1;
+      out.pwProvided = true;
+      const next = argv[i + 1];
+      if (next && !next.startsWith("-")) {
+        out.pw = next;
+        i += 1;
+      }
       continue;
     }
     if (arg === "--pw-env") {
