@@ -45,6 +45,22 @@ function encryptBuffer(plainBuffer, password, kdfParams = DEFAULT_KDF_PARAMS) {
   };
 }
 
+function encryptRaw(plainBuffer, password, kdfParams = DEFAULT_KDF_PARAMS) {
+  const salt = crypto.randomBytes(16);
+  const iv = crypto.randomBytes(12);
+  const key = deriveKey(password, salt, kdfParams);
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  const ciphertext = Buffer.concat([cipher.update(plainBuffer), cipher.final()]);
+  const tag = cipher.getAuthTag();
+
+  return {
+    ciphertext,
+    salt,
+    iv,
+    tag,
+  };
+}
+
 function decryptBuffer(payloadBase64, enc, password) {
   if (!enc || enc.alg !== "aes-256-gcm" || enc.kdf !== "scrypt") {
     throw new Error("不支持的加密格式");
@@ -64,10 +80,22 @@ function decryptBuffer(payloadBase64, enc, password) {
   return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
 }
 
+function decryptRaw(ciphertext, params, password, kdfParams = DEFAULT_KDF_PARAMS) {
+  if (!params || !params.salt || !params.iv || !params.tag) {
+    throw new Error("加密数据缺少参数");
+  }
+  const key = deriveKey(password, params.salt, kdfParams);
+  const decipher = crypto.createDecipheriv("aes-256-gcm", key, params.iv);
+  decipher.setAuthTag(params.tag);
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+}
+
 module.exports = {
   DEFAULT_PW_ENV,
   DEFAULT_KDF_PARAMS,
   resolvePassword,
   encryptBuffer,
   decryptBuffer,
+  encryptRaw,
+  decryptRaw,
 };

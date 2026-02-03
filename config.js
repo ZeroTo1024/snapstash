@@ -1,6 +1,10 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
+const DEFAULT_CONFIG_DIR = ".snapstash";
+const DEFAULT_CONFIG_FILE = "config.json";
+const DEFAULT_BACKUP_NAME = ".backup";
+
 function normalizePattern(value) {
   if (typeof value !== "string") return null;
   let p = value.trim();
@@ -22,6 +26,18 @@ function normalizeRelPath(value) {
 function normalizeExcludes(excludes) {
   if (!Array.isArray(excludes)) return [];
   return excludes.map(normalizePattern).filter(Boolean);
+}
+
+function getConfigDir(rootAbs) {
+  return path.join(rootAbs, DEFAULT_CONFIG_DIR);
+}
+
+function getConfigPath(rootAbs) {
+  return path.join(getConfigDir(rootAbs), DEFAULT_CONFIG_FILE);
+}
+
+function getDefaultBackupPath(rootAbs) {
+  return path.join(getConfigDir(rootAbs), DEFAULT_BACKUP_NAME);
 }
 
 function globToRegExp(pattern) {
@@ -54,8 +70,22 @@ function buildExcludeMatcher(excludes) {
 }
 
 function loadConfig(rootAbs) {
-  const configPath = path.join(rootAbs, ".snapstash");
+  const configPath = getConfigPath(rootAbs);
   if (!fs.existsSync(configPath)) {
+    const legacyPath = path.join(rootAbs, DEFAULT_CONFIG_DIR);
+    if (fs.existsSync(legacyPath) && fs.statSync(legacyPath).isFile()) {
+      const raw = fs.readFileSync(legacyPath, "utf8");
+      let config;
+      try {
+        config = JSON.parse(raw);
+      } catch (err) {
+        throw new Error(`无法解析 ${legacyPath}: ${err?.message || err}`);
+      }
+      if (!config || typeof config !== "object" || Array.isArray(config)) {
+        throw new Error(`配置格式不正确: ${legacyPath}`);
+      }
+      return { path: legacyPath, config };
+    }
     return { path: configPath, config: null };
   }
 
@@ -88,10 +118,27 @@ function resolveConfigPwEnv(config) {
   return null;
 }
 
+function resolveConfigLang(config) {
+  if (!config) return null;
+  const value = config.lang || config.language;
+  if (typeof value !== "string") return null;
+  const v = value.trim().toLowerCase();
+  if (v === "zh" || v === "zh-cn" || v === "cn") return "zh";
+  if (v === "en" || v === "en-us") return "en";
+  return null;
+}
+
 module.exports = {
+  DEFAULT_CONFIG_DIR,
+  DEFAULT_CONFIG_FILE,
+  DEFAULT_BACKUP_NAME,
+  getConfigDir,
+  getConfigPath,
+  getDefaultBackupPath,
   normalizeExcludes,
   buildExcludeMatcher,
   loadConfig,
   resolveConfigPassword,
   resolveConfigPwEnv,
+  resolveConfigLang,
 };

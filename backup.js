@@ -6,34 +6,71 @@ const fs = require("node:fs");
 const path = require("node:path");
 const zlib = require("node:zlib");
 
-const { encryptBuffer, resolvePassword, DEFAULT_PW_ENV } = require("./crypto");
+const { resolvePassword, DEFAULT_PW_ENV } = require("./crypto");
+const { encodeEncryptedToText, encodePlainToText } = require("./backup-format");
+const { getMessages, formatMessage } = require("./i18n");
 const {
   buildExcludeMatcher,
   loadConfig,
   normalizeExcludes,
   resolveConfigPassword,
   resolveConfigPwEnv,
+  resolveConfigLang,
+  DEFAULT_CONFIG_DIR,
+  DEFAULT_BACKUP_NAME,
+  getDefaultBackupPath,
 } = require("./config");
 
-const DEFAULT_BACKUP_FILE = "backup.json";
+const DEFAULT_BACKUP_FILE = `${DEFAULT_CONFIG_DIR}/${DEFAULT_BACKUP_NAME}`;
 const DEFAULT_PAYLOAD_ENCODING = "br";
 const GIT_MAX_BUFFER = 32 * 1024 * 1024;
+const COLOR_ENABLED = process.stdout.isTTY;
+
+const COLORS = {
+  reset: "\x1b[0m",
+  bold: "\x1b[1m",
+  dim: "\x1b[2m",
+  cyan: "\x1b[36m",
+  green: "\x1b[32m",
+  yellow: "\x1b[33m",
+  magenta: "\x1b[35m",
+};
+
+function colorize(text, color) {
+  if (!COLOR_ENABLED) return text;
+  return `${color}${text}${COLORS.reset}`;
+}
+
+function resolveHelpLang() {
+  try {
+    const { config } = loadConfig(process.cwd());
+    return resolveConfigLang(config) || "en";
+  } catch {
+    return "en";
+  }
+}
 
 function printHelp() {
+  const messages = getMessages(resolveHelpLang());
+  const vars = {
+    defaultBackupFile: DEFAULT_BACKUP_FILE,
+    defaultPwEnv: DEFAULT_PW_ENV,
+  };
+  const help = messages.backup?.help || {};
   console.log(
     [
-      "用法：node backup.js [options]",
+      formatMessage(help.usage, vars),
       "",
-      "选项：",
-      `  --output, -o <file>   输出文件 (默认 ${DEFAULT_BACKUP_FILE})`,
-      "  --pretty              JSON 美化 (仅未加密时)",
-      "  --compact             JSON 紧凑",
-      "  --encrypt             启用加密 (AES-256-GCM)",
-      "  --pw <password>       加密密码",
-      `  --pw-env <ENV>         密码环境变量名 (默认 ${DEFAULT_PW_ENV})`,
-      "  --root, --dir <path>  备份目录 (使用文件系统模式)",
-      "  --from <stash|fs>     指定来源 (默认：stash)",
-      "  --help, -h            显示帮助",
+      formatMessage(help.options, vars),
+      formatMessage(help.output, vars),
+      formatMessage(help.encrypt, vars),
+      formatMessage(help.pw, vars),
+      formatMessage(help.pwEnv, vars),
+      formatMessage(help.clipboard, vars),
+      formatMessage(help.noProgress, vars),
+      formatMessage(help.root, vars),
+      formatMessage(help.from, vars),
+      formatMessage(help.help, vars),
     ].join("\n"),
   );
 }
@@ -48,6 +85,8 @@ function parseArgs(argv) {
     root: null,
     from: null,
     help: false,
+    copy: false,
+    progress: true,
   };
 
   for (let i = 2; i < argv.length; i += 1) {
@@ -91,6 +130,14 @@ function parseArgs(argv) {
     }
     if (arg === "--help" || arg === "-h") {
       out.help = true;
+      continue;
+    }
+    if (arg === "--clipboard" || arg === "--c") {
+      out.copy = true;
+      continue;
+    }
+    if (arg === "--no-progress") {
+      out.progress = false;
       continue;
     }
     throw new Error(`未知参数: ${arg}`);
@@ -201,6 +248,10 @@ function brotliCompress(buffer) {
   return zlib.brotliCompressSync(buffer);
 }
 
+function ensureParentDir(fileAbsPath) {
+  fs.mkdirSync(path.dirname(fileAbsPath), { recursive: true });
+}
+
 function packItem(record) {
   const payload = Buffer.from(JSON.stringify(record), "utf8");
   const packed = brotliCompress(payload);
@@ -215,7 +266,12 @@ function normalizeMode(value) {
   throw new Error(`未知模式: ${value}`);
 }
 
-function collectFromGitIndex(repoRoot, excludeMatcher) {
+function formatSize(bytes) {
+  if (!Number.isFinite(bytes)) return "0.00 KB";
+  return `${(bytes / 1024).toFixed(2)} KB`;
+}
+
+function collectFromGitIndex(repoRoot, excludeMatcher, onProgress, stats) {
   const nameStatusRaw = runGit(repoRoot, ["diff", "--cached", "--name-status", "-z"], {
     text: false,
   });
@@ -229,14 +285,19 @@ function collectFromGitIndex(repoRoot, excludeMatcher) {
       })
     : staged;
 
-  return filtered.map((item) => {
+  return filtered.map((item, idx) => {
     const record = {
       k: item.kind,
       p: item.path,
     };
     if (item.oldPath) record.o = item.oldPath;
 
-    if (item.kind === "D") return packItem(record);
+    if (item.kind === "D") {
+      if (onProgress) {
+        onProgress(item, idx + 1, filtered.length, 0, 0);
+      }
+      return packItem(record);
+    }
 
     const meta = getIndexEntryMeta(repoRoot, item.path);
     if (meta) {
@@ -245,6 +306,9 @@ function collectFromGitIndex(repoRoot, excludeMatcher) {
 
     if (record.m === "160000") {
       record.sm = 1;
+      if (onProgress) {
+        onProgress(item, idx + 1, filtered.length, 0, 0);
+      }
       return packItem(record);
     }
 
@@ -252,20 +316,35 @@ function collectFromGitIndex(repoRoot, excludeMatcher) {
 
     if (record.m === "120000") {
       record.t = content.toString("utf8");
+      if (stats) {
+        stats.rawBytes += content.length;
+      }
+      if (onProgress) {
+        onProgress(item, idx + 1, filtered.length, content.length, 0);
+      }
       return packItem(record);
     }
 
     const compressed = brotliCompress(content);
     record.ce = "br";
     record.c = compressed.toString("base64");
+    if (stats) {
+      stats.rawBytes += content.length;
+      stats.compressedBytes += compressed.length;
+    }
+    if (onProgress) {
+      onProgress(item, idx + 1, filtered.length, content.length, compressed.length);
+    }
 
     return packItem(record);
   });
 }
 
-function collectFromFs(rootAbs, outputAbs, excludeMatcher) {
+function collectFromFs(rootAbs, outputAbs, excludeMatcher, onProgress, stats) {
   const items = [];
   const outputResolved = outputAbs ? path.resolve(outputAbs) : null;
+  let fileIndex = 0;
+  let fileTotal = 0;
 
   function walk(relDir) {
     const absDir = relDir ? path.join(rootAbs, relDir) : rootAbs;
@@ -292,6 +371,13 @@ function collectFromFs(rootAbs, outputAbs, excludeMatcher) {
           m: "120000",
           t: target,
         };
+        if (stats) {
+          stats.rawBytes += Buffer.byteLength(target, "utf8");
+        }
+        if (onProgress) {
+          fileIndex += 1;
+          onProgress({ kind: "A", path: relPath }, fileIndex, fileTotal, Buffer.byteLength(target, "utf8"), 0);
+        }
         items.push(packItem(record));
         continue;
       }
@@ -307,19 +393,48 @@ function collectFromFs(rootAbs, outputAbs, excludeMatcher) {
         const compressed = brotliCompress(content);
         record.ce = "br";
         record.c = compressed.toString("base64");
+        if (stats) {
+          stats.rawBytes += content.length;
+          stats.compressedBytes += compressed.length;
+        }
+        if (onProgress) {
+          fileIndex += 1;
+          onProgress({ kind: "A", path: relPath }, fileIndex, fileTotal, content.length, compressed.length);
+        }
         items.push(packItem(record));
       }
     }
+  }
+
+  if (onProgress) {
+    const countFiles = (dir) => {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      let count = 0;
+      for (const entry of entries) {
+        if (entry.name === ".git") continue;
+        const absPath = path.join(dir, entry.name);
+        const relPath = path.relative(rootAbs, absPath).split(path.sep).join("/");
+        if (excludeMatcher && excludeMatcher(relPath)) continue;
+        if (outputResolved && path.resolve(absPath) === outputResolved) continue;
+        if (entry.isDirectory()) {
+          count += countFiles(absPath);
+        } else if (entry.isFile() || entry.isSymbolicLink()) {
+          count += 1;
+        }
+      }
+      return count;
+    };
+    fileTotal = countFiles(rootAbs);
   }
 
   walk("");
   return items;
 }
 
-function buildBackup({ mode, root, outputAbs, repoRoot, excludeMatcher, excludes }) {
+function buildBackup({ mode, root, outputAbs, repoRoot, excludeMatcher, excludes, onProgress, stats }) {
   if (mode === "fs") {
     const rootAbs = path.resolve(root || process.cwd());
-    const files = collectFromFs(rootAbs, outputAbs, excludeMatcher);
+    const files = collectFromFs(rootAbs, outputAbs, excludeMatcher, onProgress, stats);
     return {
       version: 2,
       createdAt: new Date().toISOString(),
@@ -337,7 +452,7 @@ function buildBackup({ mode, root, outputAbs, repoRoot, excludeMatcher, excludes
 
   const gitCwd = root ? path.resolve(root) : process.cwd();
   const resolvedRepoRoot = repoRoot || runGit(gitCwd, ["rev-parse", "--show-toplevel"]).trim();
-  const files = collectFromGitIndex(resolvedRepoRoot, excludeMatcher);
+  const files = collectFromGitIndex(resolvedRepoRoot, excludeMatcher, onProgress, stats);
   return {
     version: 2,
     createdAt: new Date().toISOString(),
@@ -353,34 +468,42 @@ function buildBackup({ mode, root, outputAbs, repoRoot, excludeMatcher, excludes
   };
 }
 
-function writeBackupFile({ outputPath, backup, pretty, encrypt, password }) {
-  let json;
-  if (encrypt) {
-    const payload = Buffer.from(JSON.stringify(backup), "utf8");
-    const encrypted = encryptBuffer(payload, password);
-    const wrapper = {
-      version: 3,
-      encrypted: true,
-      payloadEncoding: "utf8",
-      enc: encrypted.enc,
-      payload: encrypted.payload,
-    };
-    json = JSON.stringify(wrapper);
-  } else {
-    json = JSON.stringify(backup, null, pretty ? 2 : undefined);
-  }
-
-  fs.writeFileSync(outputPath, `${json}\n`);
+function writeBackupFile({ outputPath, backup, password }) {
+  const encoded = password
+    ? encodeEncryptedToText(backup, password)
+    : encodePlainToText(backup);
+  ensureParentDir(outputPath);
+  fs.writeFileSync(outputPath, `${encoded}\n`);
   const bytes = fs.statSync(outputPath).size;
   const kb = (bytes / 1024).toFixed(2);
-  return { bytes, kb };
+  return { bytes, kb, encoded };
+}
+
+function tryCopyToClipboard(text) {
+  if (!text) return false;
+  const platform = process.platform;
+  const candidates = [];
+  if (platform === "darwin") {
+    candidates.push(["pbcopy", []]);
+  } else if (platform === "win32") {
+    candidates.push(["clip", []]);
+  } else {
+    candidates.push(["wl-copy", []]);
+    candidates.push(["xclip", ["-selection", "clipboard"]]);
+  }
+
+  for (const [cmd, args] of candidates) {
+    const res = spawnSync(cmd, args, { input: text, encoding: "utf8" });
+    if (res.status === 0) return true;
+  }
+  return false;
 }
 
 function runBackup(options) {
-  const outputPath = path.resolve(process.cwd(), options.output || DEFAULT_BACKUP_FILE);
   const mode = normalizeMode(options.from) || (options.root ? "fs" : "stash");
   let repoRoot = null;
   let rootForConfig = null;
+  const stats = { rawBytes: 0, compressedBytes: 0 };
 
   if (mode === "stash") {
     const gitCwd = options.root ? path.resolve(options.root) : process.cwd();
@@ -390,19 +513,48 @@ function runBackup(options) {
     rootForConfig = path.resolve(options.root || process.cwd());
   }
 
+  const defaultOutput = getDefaultBackupPath(rootForConfig);
+  if (!options.output) {
+    const configDir = path.dirname(defaultOutput);
+    if (fs.existsSync(configDir) && !fs.statSync(configDir).isDirectory()) {
+      throw new Error(`${configDir} 已存在但不是目录，请手动处理`);
+    }
+    fs.mkdirSync(configDir, { recursive: true });
+  }
+
+  const outputPath = options.output
+    ? path.resolve(process.cwd(), options.output)
+    : defaultOutput;
+
   const { config } = loadConfig(rootForConfig);
   const excludes = normalizeExcludes(config?.excludes);
   const excludeMatcher = buildExcludeMatcher(excludes);
   const pwEnv = options.pwEnv || resolveConfigPwEnv(config) || DEFAULT_PW_ENV;
   const configPassword = resolveConfigPassword(config);
+  const lang = resolveConfigLang(config) || "en";
+  const messages = getMessages(lang);
+  const backupMessages = messages.backup || {};
 
-  let password = null;
-  if (options.encrypt) {
-    password = resolvePassword(options.pw || configPassword, pwEnv);
-    if (!password) {
-      throw new Error(`缺少密码：请使用 --pw 或设置 ${pwEnv}`);
-    }
-  }
+  const password = resolvePassword(options.pw || configPassword, pwEnv);
+
+  const onProgress = options.progress
+    ? (item, index, total, rawBytes, brBytes) => {
+        const progress = backupMessages.progress || {};
+        const labelText = item.kind === "D" ? progress.delete : progress.backup;
+        const label = item.kind === "D"
+          ? colorize(labelText, COLORS.yellow)
+          : colorize(labelText, COLORS.cyan);
+        const count = total ? ` [${index}/${total}]` : "";
+        const countLabel = colorize(count, COLORS.dim);
+        const rawLabel = formatSize(rawBytes || 0).padStart(10, " ");
+        const brLabel = (brBytes ? formatSize(brBytes) : "0.00 KB").padStart(10, " ");
+        const pathLabel = String(item.path || "").padEnd(48, " ");
+        console.log(
+          `${label}${countLabel} ${colorize(pathLabel, COLORS.bold)} ` +
+            `${colorize(progress.size, COLORS.dim)}: ${rawLabel}   ${colorize(progress.br, COLORS.dim)}: ${brLabel}`,
+        );
+      }
+    : null;
 
   const backup = buildBackup({
     mode,
@@ -411,19 +563,39 @@ function runBackup(options) {
     repoRoot,
     excludeMatcher,
     excludes,
+    onProgress,
+    stats,
   });
 
-  const { kb } = writeBackupFile({
+  const { kb, encoded } = writeBackupFile({
     outputPath,
     backup,
-    pretty: options.pretty,
-    encrypt: options.encrypt,
     password,
   });
 
+  const outputLabel = path.relative(process.cwd(), outputPath);
+  const summary = backupMessages.summary || {};
+  console.log(`${colorize(summary.file, COLORS.magenta)}：${outputLabel}`);
+  if (stats.rawBytes > 0) {
+    const rawKb = (stats.rawBytes / 1024).toFixed(2);
+    const compKb = (stats.compressedBytes / 1024).toFixed(2);
+    const ratio = ((stats.compressedBytes / stats.rawBytes) * 100).toFixed(2);
+    console.log(
+      `${colorize(summary.raw, COLORS.dim)}：${rawKb} KB，` +
+        `${colorize(summary.compressed, COLORS.dim)}：${compKb} KB，` +
+        `${colorize(summary.ratio, COLORS.dim)}：${ratio}%`,
+    );
+  }
   console.log(
-    `执行成功：${path.relative(process.cwd(), outputPath)}（${backup.data.length} 个条目，${kb} KB）`,
+    `${colorize(summary.success, COLORS.green)}：${outputLabel}（${backup.data.length} ${summary.entries}，${kb} KB）`,
   );
+
+  if (options.copy) {
+    const copied = tryCopyToClipboard(encoded);
+    if (copied) {
+      console.log(colorize(backupMessages.clipboard, COLORS.green));
+    }
+  }
 }
 
 module.exports = {

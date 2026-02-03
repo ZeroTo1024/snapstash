@@ -4,51 +4,66 @@
 const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
+const readline = require("node:readline");
 
 const { runBackup, DEFAULT_BACKUP_FILE: BACKUP_DEFAULT } = require("../backup");
-const { runRestore, DEFAULT_BACKUP_FILE: RESTORE_DEFAULT } = require("../restore");
+const {
+  runRestore,
+  getBackupInfo,
+  DEFAULT_BACKUP_FILE: RESTORE_DEFAULT,
+} = require("../restore");
 const { DEFAULT_PW_ENV } = require("../crypto");
+const { loadConfig, resolveConfigLang } = require("../config");
+const { getMessages, formatMessage, formatList } = require("../i18n");
+
+function resolveHelpLang() {
+  try {
+    const gitRoot = tryGitRoot(process.cwd());
+    const rootAbs = gitRoot || process.cwd();
+    const { config } = loadConfig(rootAbs);
+    return resolveConfigLang(config) || "en";
+  } catch {
+    return "en";
+  }
+}
 
 function printHelp() {
+  const messages = getMessages(resolveHelpLang());
+  const snapMessages = messages.snapstash || {};
+  const help = snapMessages.help || {};
+  const vars = {
+    defaultBackupFile: BACKUP_DEFAULT,
+    defaultPwEnv: DEFAULT_PW_ENV,
+  };
   console.log(
     [
-      "snapstash - snapshot git index or directory to JSON (optional encryption)",
+      formatMessage(help.title, vars),
       "",
-      "用法:",
-      "  snapstash backup [options]",
-      "  snapstash restore [options]",
-      "  snapstash init",
+      formatMessage(help.usage, vars),
+      formatMessage(help.cmdBackup, vars),
+      formatMessage(help.cmdRestore, vars),
+      formatMessage(help.cmdInfo, vars),
+      formatMessage(help.cmdInit, vars),
       "",
-      "命令别名:",
-      "  backup: b, save",
-      "  restore: r, apply",
-      "  init: i",
+      formatMessage(help.aliasTitle, vars),
+      formatMessage(help.aliasBackup, vars),
+      formatMessage(help.aliasRestore, vars),
+      formatMessage(help.aliasInfo, vars),
       "",
-      "backup 选项:",
-      `  --output, -o <file>   输出文件 (默认 ${BACKUP_DEFAULT})`,
-      "  --pretty              JSON 美化 (仅未加密时)",
-      "  --compact             JSON 紧凑",
-      "  --encrypt             启用加密 (AES-256-GCM)",
-      "  --pw <password>        加密密码",
-      `  --pw-env <ENV>         密码环境变量名 (默认 ${DEFAULT_PW_ENV})`,
-      "  --root, --dir <path>   备份目录 (使用文件系统模式)",
-      "  --from <stash|fs>      指定来源 (默认：stash)",
+      formatMessage(help.backupTitle, vars),
+      ...formatList(help.backupOptions, vars),
       "",
-      "restore 选项:",
-      `  --input, -i <file>    输入文件 (默认 ${RESTORE_DEFAULT})`,
-      "  --root, --dir <path>   恢复目录 (默认当前目录)",
-      "  --pw <password>        解密密码",
-      `  --pw-env <ENV>         密码环境变量名 (默认 ${DEFAULT_PW_ENV})`,
+      formatMessage(help.restoreTitle, vars),
+      ...formatList(help.restoreOptions, vars),
       "",
-      "示例:",
-      "  snapstash b",
-      "  snapstash b --encrypt --pw 123",
-      "  snapstash b --root ./my-folder",
-      "  snapstash r --pw 123",
-      "  snapstash init",
+      formatMessage(help.infoTitle, vars),
+      ...formatList(help.infoOptions, vars),
       "",
-      "配置文件:",
-      "  支持在项目根目录放置 .snapstash (JSON)，可配置 password/passwordEnv 与 excludes。",
+      formatMessage(help.examplesTitle, vars),
+      ...formatList(help.examples, vars),
+      "",
+      formatMessage(help.configTitle, vars),
+      formatMessage(help.configDesc, vars),
     ].join("\n"),
   );
 }
@@ -63,6 +78,8 @@ function parseBackupArgs(argv) {
     root: null,
     from: null,
     help: false,
+    copy: false,
+    progress: true,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -94,6 +111,14 @@ function parseBackupArgs(argv) {
       i += 1;
       continue;
     }
+    if (arg === "--clipboard" || arg === "--c") {
+      out.copy = true;
+      continue;
+    }
+    if (arg === "--no-progress") {
+      out.progress = false;
+      continue;
+    }
     if (arg === "--root" || arg === "--dir") {
       out.root = argv[i + 1];
       i += 1;
@@ -115,6 +140,52 @@ function parseBackupArgs(argv) {
 }
 
 function parseRestoreArgs(argv) {
+  const out = {
+    input: RESTORE_DEFAULT,
+    root: null,
+    pw: null,
+    pwEnv: null,
+    help: false,
+    progress: true,
+  };
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === "--input" || arg === "-i") {
+      out.input = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === "--root" || arg === "--dir") {
+      out.root = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === "--pw") {
+      out.pw = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === "--pw-env") {
+      out.pwEnv = argv[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg === "--no-progress") {
+      out.progress = false;
+      continue;
+    }
+    if (arg === "--help" || arg === "-h") {
+      out.help = true;
+      continue;
+    }
+    throw new Error(`未知参数: ${arg}`);
+  }
+
+  return out;
+}
+
+function parseInfoArgs(argv) {
   const out = {
     input: RESTORE_DEFAULT,
     root: null,
@@ -160,7 +231,8 @@ function normalizeCommand(cmd) {
   const value = cmd.toLowerCase();
   if (["backup", "b", "save"].includes(value)) return "backup";
   if (["restore", "r", "apply"].includes(value)) return "restore";
-  if (["init", "i"].includes(value)) return "init";
+  if (["i", "info"].includes(value)) return "info";
+  if (["init"].includes(value)) return "init";
   return null;
 }
 
@@ -176,7 +248,7 @@ function tryGitRoot(cwd) {
 
 function ensureGitignore(rootAbs) {
   const gitignorePath = path.join(rootAbs, ".gitignore");
-  const entry = ".snapstash";
+  const entry = ".snapstash/";
   let content = "";
 
   if (fs.existsSync(gitignorePath)) {
@@ -195,41 +267,80 @@ function ensureGitignore(rootAbs) {
   return true;
 }
 
-function runInit() {
+function promptInput(question) {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(answer);
+    });
+  });
+}
+
+async function runInit() {
   const gitRoot = tryGitRoot(process.cwd());
   const rootAbs = gitRoot || process.cwd();
-  const configPath = path.join(rootAbs, ".snapstash");
+  const { config } = loadConfig(rootAbs);
+  const lang = resolveConfigLang(config) || "en";
+  const messages = getMessages(lang);
+  const snapMessages = messages.snapstash || {};
+  const initMessages = snapMessages.init || {};
+  const configDir = path.join(rootAbs, ".snapstash");
+  const configPath = path.join(configDir, "config.json");
+
+  if (fs.existsSync(configDir) && !fs.statSync(configDir).isDirectory()) {
+    throw new Error(`${configDir} 已存在但不是目录，请手动处理`);
+  }
+
+  if (!fs.existsSync(configDir)) {
+    fs.mkdirSync(configDir, { recursive: true });
+  }
 
   if (!fs.existsSync(configPath)) {
+    const selectedLang = await promptInput(initMessages.promptLang || "Select language (en/zh) [en]: ");
+    const langValue = (selectedLang || "en").trim().toLowerCase();
+    const normalizedLang = langValue === "zh" ? "zh" : "en";
+    const passwordInput = await promptInput(initMessages.promptPassword || "Password (empty for none): ");
     const template = {
       version: 1,
-      password: "",
+      lang: normalizedLang,
+      password: passwordInput || "",
       passwordEnv: DEFAULT_PW_ENV,
       excludes: [
+        ".snapstash/",
         "node_modules/",
         "dist/",
         "*.log",
       ],
     };
     fs.writeFileSync(configPath, `${JSON.stringify(template, null, 2)}\n`);
-    console.log(`已创建：${configPath}`);
+    console.log(formatMessage(initMessages.created, { path: configPath }));
   } else {
-    console.log(`已存在：${configPath}`);
+    console.log(formatMessage(initMessages.exists, { path: configPath }));
   }
 
   if (gitRoot) {
     const added = ensureGitignore(rootAbs);
     if (added) {
-      console.log("已写入 .gitignore: .snapstash");
+      console.log(initMessages.gitignoreAdded);
     } else {
-      console.log(".gitignore 已包含 .snapstash");
+      console.log(initMessages.gitignoreExists);
     }
   }
 }
 
 function main() {
-  const [cmdRaw, ...rest] = process.argv.slice(2);
-  if (!cmdRaw || cmdRaw === "--help" || cmdRaw === "-h") {
+  const args = process.argv.slice(2);
+  const [cmdRaw, ...rest] = args;
+  if (!cmdRaw) {
+    const options = parseBackupArgs([]);
+    runBackup(options);
+    return;
+  }
+  if (cmdRaw === "--help" || cmdRaw === "-h") {
     printHelp();
     return;
   }
@@ -260,14 +371,42 @@ function main() {
     return;
   }
 
-  if (cmd === "init") {
-    runInit();
+  if (cmd === "info") {
+    const options = parseInfoArgs(rest);
+    if (options.help) {
+      printHelp();
+      return;
+    }
+    const info = getBackupInfo(options);
+    const { config } = loadConfig(path.resolve(options.root || process.cwd()));
+    const lang = resolveConfigLang(config) || "en";
+    const messages = getMessages(lang);
+    const snapMessages = messages.snapstash || {};
+    const infoMessages = snapMessages.info || {};
+    console.log(
+      [
+        `${infoMessages.version}: ${info.version ?? ""}`,
+        `${infoMessages.createdAt}: ${info.createdAt ?? ""}`,
+        `${infoMessages.repoRoot}: ${info.repoRoot ?? ""}`,
+        `${infoMessages.head}: ${info.head ?? ""}`,
+        `${infoMessages.payloadEncoding}: ${info.payloadEncoding ?? ""}`,
+        `${infoMessages.source}: ${info.source?.mode ?? ""}${info.source?.root ? ` (${info.source.root})` : ""}`,
+        `${infoMessages.items}: ${info.items ?? 0}`,
+      ].join("\n"),
+    );
     return;
+  }
+
+  if (cmd === "init") {
+    return runInit();
   }
 }
 
 try {
-  main();
+  Promise.resolve(main()).catch((err) => {
+    console.error(err?.message || err);
+    process.exitCode = 1;
+  });
 } catch (err) {
   console.error(err?.message || err);
   process.exitCode = 1;

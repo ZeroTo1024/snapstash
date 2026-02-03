@@ -1,0 +1,132 @@
+{
+  "backup": {
+    "help": {
+      "usage": "用法：node backup.js [options]",
+      "options": "选项：",
+      "output": "  --output, -o <file>   输出文件 (默认 {defaultBackupFile})",
+      "encrypt": "  --encrypt             启用加密 (AES-256-GCM)",
+      "pw": "  --pw <password>       加密密码 (可选，不填则仅压缩)",
+      "pwEnv": "  --pw-env <ENV>         密码环境变量名 (默认 {defaultPwEnv})",
+      "clipboard": "  --clipboard, --c       复制到剪贴板",
+      "noProgress": "  --no-progress          关闭进度日志",
+      "root": "  --root, --dir <path>  备份目录 (使用文件系统模式)",
+      "from": "  --from <stash|fs>     指定来源 (默认：stash)",
+      "help": "  --help, -h            显示帮助"
+    },
+    "progress": {
+      "backup": "完成",
+      "delete": "删除",
+      "size": "size",
+      "br": "br"
+    },
+    "summary": {
+      "file": "文件路径",
+      "raw": "原始大小",
+      "compressed": "压缩后",
+      "ratio": "压缩比",
+      "success": "执行成功",
+      "entries": "个条目"
+    },
+    "clipboard": "已复制到剪贴板"
+  },
+  "restore": {
+    "help": {
+      "usage": "用法：node restore.js [options]",
+      "options": "选项：",
+      "input": "  --input, -i <file>    输入文件 (默认 {defaultBackupFile})",
+      "root": "  --root, --dir <path>   恢复目录 (默认当前目录)",
+      "pw": "  --pw <password>        解密密码",
+      "pwEnv": "  --pw-env <ENV>         密码环境变量名 (默认 {defaultPwEnv})",
+      "noProgress": "  --no-progress          关闭进度日志",
+      "help": "  --help, -h             显示帮助"
+    },
+    "progress": {
+      "restore": "恢复",
+      "delete": "删除",
+      "size": "size",
+      "br": "br"
+    },
+    "summary": {
+      "done": "执行成功",
+      "add": "add",
+      "del": "del",
+      "skip": "skip",
+      "total": "total",
+      "path": "path"
+    },
+    "errors": {
+      "encrypted": "该文件已加密：请使用 --pw 或设置 {pwEnv}",
+      "decryptFailed": "解密失败：密码错误或文件损坏",
+      "missingData": "{defaultBackupFile} 格式不正确（缺少 data 数组）",
+      "version": "{defaultBackupFile} 版本不支持：{version}"
+    }
+  },
+  "snapstash": {
+    "help": {
+      "title": "snapstash - snapshot git index or directory into compressed backup",
+      "usage": "用法:",
+      "cmdBackup": "  snapstash b [options]",
+      "cmdRestore": "  snapstash r [options]",
+      "cmdInfo": "  snapstash i [options]",
+      "cmdInit": "  snapstash init",
+      "aliasTitle": "命令别名:",
+      "aliasBackup": "  b: backup",
+      "aliasRestore": "  r: restore",
+      "aliasInfo": "  i: info",
+      "backupTitle": "backup 选项:",
+      "restoreTitle": "restore 选项:",
+      "infoTitle": "info 选项:",
+      "examplesTitle": "示例:",
+      "configTitle": "配置文件:",
+      "configDesc": "  支持在项目根目录放置 .snapstash/config.json，可配置 password/passwordEnv、excludes 与 lang。",
+      "backupOptions": [
+        "  --output, -o <file>   输出文件 (默认 {defaultBackupFile})",
+        "  --encrypt             启用加密 (AES-256-GCM)",
+        "  --pw <password>        加密密码 (可选，不填则仅压缩)",
+        "  --pw-env <ENV>         密码环境变量名 (默认 {defaultPwEnv})",
+        "  --clipboard, --c       复制到剪贴板",
+        "  --no-progress          关闭进度日志",
+        "  --root, --dir <path>   备份目录 (使用文件系统模式)",
+        "  --from <stash|fs>      指定来源 (默认：stash)"
+      ],
+      "restoreOptions": [
+        "  --input, -i <file>    输入文件 (默认 {defaultBackupFile})",
+        "  --root, --dir <path>   恢复目录 (默认当前目录)",
+        "  --pw <password>        解密密码",
+        "  --pw-env <ENV>         密码环境变量名 (默认 {defaultPwEnv})",
+        "  --no-progress          关闭进度日志"
+      ],
+      "infoOptions": [
+        "  --input, -i <file>    输入文件 (默认 {defaultBackupFile})",
+        "  --root, --dir <path>   备份所属目录 (默认当前目录)",
+        "  --pw <password>        解密密码",
+        "  --pw-env <ENV>         密码环境变量名 (默认 {defaultPwEnv})"
+      ],
+      "examples": [
+        "  snapstash",
+        "  snapstash b --pw 123",
+        "  snapstash b --root ./my-folder --pw 123",
+        "  snapstash r --pw 123",
+        "  snapstash i --pw 123",
+        "  snapstash init"
+      ]
+    },
+    "init": {
+      "created": "已创建：{path}",
+      "exists": "已存在：{path}",
+      "gitignoreAdded": "已写入 .gitignore: .snapstash",
+      "gitignoreExists": ".gitignore 已包含 .snapstash",
+      "promptLang": "选择语种 (en/zh) [en]: ",
+      "promptPassword": "密码(可为空): "
+    },
+    "info": {
+      "version": "version",
+      "createdAt": "createdAt",
+      "repoRoot": "repoRoot",
+      "head": "head",
+      "payloadEncoding": "payloadEncoding",
+      "source": "source",
+      "items": "items"
+    }
+  }
+}

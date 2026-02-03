@@ -1,0 +1,132 @@
+{
+  "backup": {
+    "help": {
+      "usage": "Usage: node backup.js [options]",
+      "options": "Options:",
+      "output": "  --output, -o <file>   Output file (default {defaultBackupFile})",
+      "encrypt": "  --encrypt             Enable encryption (AES-256-GCM)",
+      "pw": "  --pw <password>       Encryption password (optional, empty = compress only)",
+      "pwEnv": "  --pw-env <ENV>         Password env name (default {defaultPwEnv})",
+      "clipboard": "  --clipboard, --c       Copy to clipboard",
+      "noProgress": "  --no-progress          Disable progress logs",
+      "root": "  --root, --dir <path>  Backup directory (filesystem mode)",
+      "from": "  --from <stash|fs>     Source (default: stash)",
+      "help": "  --help, -h            Show help"
+    },
+    "progress": {
+      "backup": "Backup",
+      "delete": "Delete",
+      "size": "size",
+      "br": "br"
+    },
+    "summary": {
+      "file": "Backup file path",
+      "raw": "Raw size",
+      "compressed": "Compressed",
+      "ratio": "Ratio",
+      "success": "Done",
+      "entries": "entries"
+    },
+    "clipboard": "Copied to clipboard"
+  },
+  "restore": {
+    "help": {
+      "usage": "Usage: node restore.js [options]",
+      "options": "Options:",
+      "input": "  --input, -i <file>    Input file (default {defaultBackupFile})",
+      "root": "  --root, --dir <path>   Restore directory (default cwd)",
+      "pw": "  --pw <password>        Decryption password",
+      "pwEnv": "  --pw-env <ENV>         Password env name (default {defaultPwEnv})",
+      "noProgress": "  --no-progress          Disable progress logs",
+      "help": "  --help, -h             Show help"
+    },
+    "progress": {
+      "restore": "Restore",
+      "delete": "Delete",
+      "size": "size",
+      "br": "br"
+    },
+    "summary": {
+      "done": "Done",
+      "add": "add",
+      "del": "del",
+      "skip": "skip",
+      "total": "total",
+      "path": "path"
+    },
+    "errors": {
+      "encrypted": "Encrypted file: use --pw or set {pwEnv}",
+      "decryptFailed": "Decryption failed: wrong password or corrupted file",
+      "missingData": "{defaultBackupFile} is invalid (missing data array)",
+      "version": "{defaultBackupFile} version not supported: {version}"
+    }
+  },
+  "snapstash": {
+    "help": {
+      "title": "snapstash - snapshot git index or directory into compressed backup",
+      "usage": "Usage:",
+      "cmdBackup": "  snapstash b [options]",
+      "cmdRestore": "  snapstash r [options]",
+      "cmdInfo": "  snapstash i [options]",
+      "cmdInit": "  snapstash init",
+      "aliasTitle": "Command aliases:",
+      "aliasBackup": "  b: backup",
+      "aliasRestore": "  r: restore",
+      "aliasInfo": "  i: info",
+      "backupTitle": "backup options:",
+      "restoreTitle": "restore options:",
+      "infoTitle": "info options:",
+      "examplesTitle": "Examples:",
+      "configTitle": "Config:",
+      "configDesc": "  Place .snapstash/config.json in project root to set password/passwordEnv, excludes, and lang.",
+      "backupOptions": [
+        "  --output, -o <file>   Output file (default {defaultBackupFile})",
+        "  --encrypt             Enable encryption (AES-256-GCM)",
+        "  --pw <password>        Encryption password (optional, empty = compress only)",
+        "  --pw-env <ENV>         Password env name (default {defaultPwEnv})",
+        "  --clipboard, --c       Copy to clipboard",
+        "  --no-progress          Disable progress logs",
+        "  --root, --dir <path>   Backup directory (filesystem mode)",
+        "  --from <stash|fs>      Source (default: stash)"
+      ],
+      "restoreOptions": [
+        "  --input, -i <file>    Input file (default {defaultBackupFile})",
+        "  --root, --dir <path>   Restore directory (default cwd)",
+        "  --pw <password>        Decryption password",
+        "  --pw-env <ENV>         Password env name (default {defaultPwEnv})",
+        "  --no-progress          Disable progress logs"
+      ],
+      "infoOptions": [
+        "  --input, -i <file>    Input file (default {defaultBackupFile})",
+        "  --root, --dir <path>   Backup root directory (default cwd)",
+        "  --pw <password>        Decryption password",
+        "  --pw-env <ENV>         Password env name (default {defaultPwEnv})"
+      ],
+      "examples": [
+        "  snapstash",
+        "  snapstash b --pw 123",
+        "  snapstash b --root ./my-folder --pw 123",
+        "  snapstash r --pw 123",
+        "  snapstash i --pw 123",
+        "  snapstash init"
+      ]
+    },
+    "init": {
+      "created": "Created: {path}",
+      "exists": "Exists: {path}",
+      "gitignoreAdded": "Updated .gitignore: .snapstash",
+      "gitignoreExists": ".gitignore already contains .snapstash",
+      "promptLang": "Select language (en/zh) [en]: ",
+      "promptPassword": "Password (empty for none): "
+    },
+    "info": {
+      "version": "version",
+      "createdAt": "createdAt",
+      "repoRoot": "repoRoot",
+      "head": "head",
+      "payloadEncoding": "payloadEncoding",
+      "source": "source",
+      "items": "items"
+    }
+  }
+}

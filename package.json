@@ -9,9 +9,12 @@
   "files": [
     "bin",
     "backup.js",
+    "backup-format.js",
     "restore.js",
     "crypto.js",
     "config.js",
+    "i18n.js",
+    "i18n",
     "README.md"
   ],
   "keywords": [
