@@ -1,6 +1,6 @@
 {
   "name": "snapstash",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Snapshot git index or a directory to JSON with optional encryption",
   "repository": {
     "type": "git",
