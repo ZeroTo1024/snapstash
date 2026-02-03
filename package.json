@@ -22,6 +22,7 @@
     "crypto.js",
     "config.js",
     "i18n.js",
+    "progress.js",
     "i18n",
     "workers",
     "README.md"

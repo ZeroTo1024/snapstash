@@ -144,3 +144,10 @@ You can place a `.snapstash/config.json` file in the project root:
 - `snapstash init` creates a `.snapstash` template and adds it to `.gitignore` when inside a Git repo.
 - Use `--clipboard` (or `--c`) to copy backup text to clipboard.
 - Backup/restore will print progress by default; use `--no-progress` to disable.
+
+## Link
+
+- [Nano Banana 2](https://ricebowl.ai/m/nano-banana-2)
+- [Sora 2](https://ricebowl.ai/m/sora/sora-2)
+- [Grok Video](https://ricebowl.ai/m/grok-video)
+- [Ricebowl AI](https://ricebowl.ai)

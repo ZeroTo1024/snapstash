@@ -37,8 +37,10 @@
       "pwFromConfig": "(from {path})",
       "reduction": "压缩率",
       "savings": "体积节省",
-      "fileSize": "备份文件大小",
-      "overhead": "额外开销(base64)"
+      "fileSize": "文件大小",
+      "overhead": "额外开销(base64)",
+      "encoding": "压缩编码",
+      "encAlg": "加密算法"
     },
     "clipboard": "已复制到剪贴板"
   },
@@ -146,7 +148,7 @@
       "createdAt": "createdAt",
       "repoRoot": "repoRoot",
       "head": "head",
-      "payloadEncoding": "payloadEncoding",
+      "payloadEncoding": "encoding",
       "source": "source",
       "items": "items",
       "encrypted": "encrypted"

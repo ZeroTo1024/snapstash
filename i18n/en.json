@@ -27,18 +27,20 @@
       "time": "dur"
     },
     "summary": {
-      "file": "Backup file path",
+      "file": "Output path",
       "raw": "Raw size",
       "compressed": "Compressed",
       "ratio": "Ratio",
       "success": "Done",
       "entries": "entries",
-      "pwMasked": "Encryption key",
+      "pwMasked": "Secret key",
       "pwFromConfig": "(from {path})",
       "reduction": "Reduction",
       "savings": "Savings",
-      "fileSize": "Backup file size",
-      "overhead": "Overhead(base64)"
+      "fileSize": "File size",
+      "overhead": "Overhead(base64)",
+      "encoding": "Encoding",
+      "encAlg": "Encryption"
     },
     "clipboard": "Copied to clipboard"
   },
@@ -146,7 +148,7 @@
       "createdAt": "createdAt",
       "repoRoot": "repoRoot",
       "head": "head",
-      "payloadEncoding": "payloadEncoding",
+      "payloadEncoding": "encoding",
       "source": "source",
       "items": "items",
       "encrypted": "encrypted"

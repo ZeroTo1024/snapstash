@@ -119,3 +119,10 @@ snapstash init
 - `snapstash init` 会创建 `.snapstash` 模板并在 Git 仓库中加入 `.gitignore`。
 - `--clipboard`/`--c` 复制备份文本到剪贴板。
 - 默认输出进度日志，可用 `--no-progress` 关闭。
+
+## Link
+
+- [Nano Banana 2](https://ricebowl.ai/m/nano-banana-2)
+- [Sora 2](https://ricebowl.ai/m/sora/sora-2)
+- [Grok Video](https://ricebowl.ai/m/grok-video)
+- [Ricebowl AI](https://ricebowl.ai)

@@ -11,6 +11,13 @@ const { Worker } = require("node:worker_threads");
 const { resolvePassword, DEFAULT_PW_ENV } = require("./crypto");
 const { encodeEncryptedToText, encodePlainToText } = require("./backup-format");
 const { getMessages, formatMessage } = require("./i18n");
+const { createProgressRenderer } = require("./progress");
+const {
+  SUMMARY_LABEL_WIDTH,
+  STATUS_LABEL_WIDTH,
+  PATH_LABEL_WIDTH,
+  FIELD_GAP,
+} = require("./constants");
 const {
   buildExcludeMatcher,
   loadConfig,
@@ -28,8 +35,8 @@ const DEFAULT_BACKUP_FILE = `${DEFAULT_CONFIG_DIR}/${DEFAULT_BACKUP_NAME}`;
 const DEFAULT_PAYLOAD_ENCODING = "br";
 const GIT_MAX_BUFFER = 32 * 1024 * 1024;
 const DEFAULT_THREADS = Math.max(2, Math.min(4, os.cpus().length || 2));
-const DEFAULT_BIGFILE_MB = 2;
-const DEFAULT_FILECOUNT_THRESHOLD = 100;
+const DEFAULT_BIGFILE_MB = 1;
+const DEFAULT_FILECOUNT_THRESHOLD = 80;
 const COLOR_ENABLED = process.stdout.isTTY;
 
 const COLORS = {
@@ -45,42 +52,6 @@ const COLORS = {
 function colorize(text, color) {
   if (!COLOR_ENABLED) return text;
   return `${color}${text}${COLORS.reset}`;
-}
-
-function createProgressRenderer() {
-  if (!process.stdout.isTTY) return null;
-  try {
-    const logUpdateModule = require("log-update");
-    const logUpdate = logUpdateModule?.default || logUpdateModule;
-    const ansiEscapes = require("ansi-escapes");
-    const hideCursor = ansiEscapes?.cursorHide || "";
-    const showCursor = ansiEscapes?.cursorShow || "";
-    let rows = [];
-    let active = true;
-
-    const start = (total) => {
-      rows = Array.from({ length: total }, () => "");
-      if (hideCursor) process.stdout.write(hideCursor);
-    };
-
-    const update = (index, line) => {
-      if (!active) return;
-      const i = Math.max(1, index) - 1;
-      rows[i] = line;
-      logUpdate(rows.join("\n"));
-    };
-
-    const stop = () => {
-      if (!active) return;
-      active = false;
-      logUpdate.done();
-      if (showCursor) process.stdout.write(showCursor);
-    };
-
-    return { start, update, stop };
-  } catch {
-    return null;
-  }
 }
 
 function resolveHelpLang() {
@@ -369,6 +340,24 @@ function formatDuration(ms) {
   if (!Number.isFinite(ms)) return "0ms";
   if (ms < 1000) return `${ms.toFixed(0)}ms`;
   return `${(ms / 1000).toFixed(2)}s`;
+}
+
+function displayWidth(text) {
+  let width = 0;
+  for (const ch of String(text ?? "")) {
+    const code = ch.codePointAt(0);
+    if (!code) continue;
+    if (code <= 0x1f || (code >= 0x7f && code <= 0xa0)) continue;
+    width += code <= 0x7f ? 1 : 2;
+  }
+  return width;
+}
+
+function padDisplay(text, targetWidth) {
+  const str = String(text ?? "");
+  const width = displayWidth(str);
+  if (width >= targetWidth) return str;
+  return str + " ".repeat(targetWidth - width);
 }
 
 function resolveConcurrencyConfig(config) {
@@ -799,16 +788,16 @@ async function runBackup(options) {
     ? (item, index, total, rawBytes, brBytes, durationMs, status) => {
         const progress = backupMessages.progress || {};
         const statusText = status || "done";
-        const statusLabel = statusText.padEnd(10, " ");
+        const statusLabel = statusText.padEnd(STATUS_LABEL_WIDTH, " ");
         const statusColor = statusText === "processing" ? COLORS.dim : COLORS.cyan;
         const count = total ? ` [${index}/${total}]` : "";
         const countLabel = colorize(count, COLORS.dim);
         const rawLabel = formatSize(rawBytes || 0).padStart(10, " ");
         const brLabel = (brBytes ? formatSize(brBytes) : "0.00 KB").padStart(10, " ");
-        const pathLabel = String(item.path || "").padEnd(64, " ");
+        const pathLabel = String(item.path || "").padEnd(PATH_LABEL_WIDTH, " ");
         const timeLabel = formatDuration(durationMs || 0).padStart(7, " ");
         const line = `${colorize(statusLabel, statusColor)}${countLabel} ${colorize(pathLabel, COLORS.bold)} ` +
-          `${colorize(progress.size, COLORS.dim)}: ${rawLabel}   ${colorize(progress.br, COLORS.dim)}: ${brLabel}   ` +
+          `${colorize(progress.size, COLORS.dim)}: ${rawLabel}${FIELD_GAP}${colorize(progress.br, COLORS.dim)}: ${brLabel}${FIELD_GAP}` +
           `${colorize(progress.time, COLORS.dim)}: ${colorize(timeLabel, COLORS.green)}`;
         if (renderer && total) {
           if (!rendererStarted) {
@@ -849,48 +838,65 @@ async function runBackup(options) {
 
   const outputLabel = path.relative(process.cwd(), outputPath);
   const summary = backupMessages.summary || {};
+  const summaryLabelWidth = SUMMARY_LABEL_WIDTH;
+  const formatSummaryLine = (label, value, color) => {
+    const text = padDisplay(label, summaryLabelWidth);
+    return `${colorize(text, color || COLORS.magenta)}：${value}`;
+  };
   if (rendererStarted && renderer) {
     renderer.stop();
   }
-  console.log(`${colorize(summary.file, COLORS.magenta)}：${outputLabel}`);
+  console.log(formatSummaryLine(summary.file, outputLabel, COLORS.dim));
   if (stats.rawBytes > 0) {
     const rawKb = (stats.rawBytes / 1024).toFixed(2);
     const compKb = (stats.compressedBytes / 1024).toFixed(2);
     const ratio = ((stats.compressedBytes / stats.rawBytes) * 100).toFixed(2);
     const reduced = (100 - Number(ratio)).toFixed(2);
     const savedKb = ((stats.rawBytes - stats.compressedBytes) / 1024).toFixed(2);
-    const savedLabel = `[${savedKb}kb ↓]`;
-    const reducedLabel = `[${reduced}% ↓]`;
+    const savedLabel = `(${savedKb}kb ↓)`;
+    const reducedLabel = `(${reduced}% ↓)`;
     console.log(
-      `${colorize(summary.raw, COLORS.dim)}：${rawKb} KB，` +
+      `${colorize(padDisplay(summary.raw, summaryLabelWidth), COLORS.dim)}：${rawKb} KB，` +
         `${colorize(summary.compressed, COLORS.dim)}：${compKb} KB ` +
-        `${colorize(savedLabel, COLORS.green)}，` +
+        `${colorize(savedLabel, COLORS.green)}， ` +
         `${colorize(summary.ratio, COLORS.dim)}：${ratio}% ` +
         `${colorize(reducedLabel, COLORS.green)}`,
     );
+    console.log(formatSummaryLine(summary.encoding, DEFAULT_PAYLOAD_ENCODING, COLORS.dim));
     if (Number.isFinite(backupFileBytes) && stats.compressedBytes > 0) {
       const fileKb = (backupFileBytes / 1024).toFixed(2);
       const overheadBytes = Math.max(backupFileBytes - stats.compressedBytes, 0);
       const overheadKb = (overheadBytes / 1024).toFixed(2);
       const overheadRatio = ((overheadBytes / stats.compressedBytes) * 100).toFixed(2);
       console.log(
-        `${colorize(summary.fileSize, COLORS.dim)}：${fileKb} KB，` +
-          `${colorize(summary.overhead, COLORS.dim)}：${colorize(`${overheadKb}kb (${overheadRatio}%)`, COLORS.green)}`,
+        `${colorize(padDisplay(summary.fileSize, summaryLabelWidth), COLORS.dim)}：${fileKb} KB，` +
+          ` ${colorize(summary.overhead, COLORS.dim)}：${colorize(`${overheadKb}kb (${overheadRatio}%)`, COLORS.green)}`,
       );
     }
   }
   const durationLabel = formatDuration(Number(process.hrtime.bigint() - startAt) / 1e6);
   console.log(
-    `${colorize(summary.success, COLORS.green)}：${outputLabel}（${backup.data.length} ${summary.entries}，${kb} KB）`,
-    `${colorize("Time", COLORS.dim)}: ${colorize(durationLabel, COLORS.green)}`
+    `${colorize(padDisplay(summary.success, summaryLabelWidth), COLORS.green)}：` +
+      `${colorize("File: ", COLORS.dim)} ${outputLabel}（${backup.data.length} ${summary.entries}，${kb} KB）`,
+    `${colorize("Dur: ", COLORS.dim)} ${colorize(durationLabel, COLORS.green)}`
   );
+  // console.log(
+  //   `${colorize("Time".padEnd(summaryLabelWidth, " "), COLORS.dim)}：${colorize(durationLabel, COLORS.green)}`,
+  // );
   if (!options.noEncrypt && encryptPassword && (pwSource === "config" || pwSource === "arg")) {
     const label = summary.pwMasked || "Encryption key";
     const masked = maskSecret(password);
     const suffix = pwSource === "config"
       ? ` ${formatMessage(summary.pwFromConfig || "(from {path})", { path: configPath || "config.json" })}`
       : "";
-    console.log(`${colorize(label, COLORS.yellow)}: ${colorize(masked, COLORS.bold)}${suffix}`);
+    console.log(
+      `${colorize(padDisplay(label, summaryLabelWidth), COLORS.yellow)}：` +
+        `${colorize(masked, COLORS.bold)}${suffix}`,
+    );
+    console.log(
+      `${colorize(padDisplay(summary.encAlg, summaryLabelWidth), COLORS.dim)}：` +
+        `${colorize("AES-256-GCM", COLORS.green)}`,
+    );
   }
 
   if (options.copy) {

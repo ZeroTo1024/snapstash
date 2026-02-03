@@ -8,6 +8,13 @@ const zlib = require("node:zlib");
 const { resolvePassword, DEFAULT_PW_ENV } = require("./crypto");
 const { parseBackupText } = require("./backup-format");
 const { getMessages, formatMessage } = require("./i18n");
+const { createProgressRenderer } = require("./progress");
+const {
+  SUMMARY_LABEL_WIDTH,
+  STATUS_LABEL_WIDTH,
+  PATH_LABEL_WIDTH,
+  FIELD_GAP,
+} = require("./constants");
 const {
   loadConfig,
   loadConfigAt,
@@ -34,42 +41,6 @@ const COLORS = {
 function colorize(text, color) {
   if (!COLOR_ENABLED) return text;
   return `${color}${text}${COLORS.reset}`;
-}
-
-function createProgressRenderer() {
-  if (!process.stdout.isTTY) return null;
-  try {
-    const logUpdateModule = require("log-update");
-    const logUpdate = logUpdateModule?.default || logUpdateModule;
-    const ansiEscapes = require("ansi-escapes");
-    const hideCursor = ansiEscapes?.cursorHide || "";
-    const showCursor = ansiEscapes?.cursorShow || "";
-    let rows = [];
-    let active = true;
-
-    const start = (total) => {
-      rows = Array.from({ length: total }, () => "");
-      if (hideCursor) process.stdout.write(hideCursor);
-    };
-
-    const update = (index, line) => {
-      if (!active) return;
-      const i = Math.max(1, index) - 1;
-      rows[i] = line;
-      logUpdate(rows.join("\n"));
-    };
-
-    const stop = () => {
-      if (!active) return;
-      active = false;
-      logUpdate.done();
-      if (showCursor) process.stdout.write(showCursor);
-    };
-
-    return { start, update, stop };
-  } catch {
-    return null;
-  }
 }
 
 function resolveHelpLang() {
@@ -221,6 +192,24 @@ function formatDuration(ms) {
   return `${(ms / 1000).toFixed(2)}s`;
 }
 
+function displayWidth(text) {
+  let width = 0;
+  for (const ch of String(text ?? "")) {
+    const code = ch.codePointAt(0);
+    if (!code) continue;
+    if (code <= 0x1f || (code >= 0x7f && code <= 0xa0)) continue;
+    width += code <= 0x7f ? 1 : 2;
+  }
+  return width;
+}
+
+function padDisplay(text, targetWidth) {
+  const str = String(text ?? "");
+  const width = displayWidth(str);
+  if (width >= targetWidth) return str;
+  return str + " ".repeat(targetWidth - width);
+}
+
 function loadBackup(inputPath, options) {
   const raw = fs.readFileSync(inputPath, "utf8").trim();
   let backup;
@@ -301,16 +290,16 @@ function runRestore(options) {
   const emitProgress = (status, index, rawBytes, brBytes, durationMs, relPath) => {
     if (!options.progress) return;
     const statusText = status || "done";
-    const statusLabel = statusText.padEnd(10, " ");
+    const statusLabel = statusText.padEnd(STATUS_LABEL_WIDTH, " ");
     const statusColor = statusText === "processing" ? COLORS.dim : COLORS.cyan;
     const count = total ? ` [${index}/${total}]` : "";
     const countLabel = colorize(count, COLORS.dim);
     const rawLabel = formatSize(rawBytes || 0).padStart(10, " ");
     const brLabel = (brBytes ? formatSize(brBytes) : "0.00 KB").padStart(10, " ");
-    const pathLabel = String(relPath || "").padEnd(64, " ");
+    const pathLabel = String(relPath || "").padEnd(PATH_LABEL_WIDTH, " ");
     const timeLabel = formatDuration(durationMs || 0).padStart(7, " ");
     const line = `${colorize(statusLabel, statusColor)}${countLabel} ${colorize(pathLabel, COLORS.bold)} ` +
-      `${colorize(restoreMessages.progress.size, COLORS.dim)}: ${rawLabel}   ${colorize(restoreMessages.progress.br, COLORS.dim)}: ${brLabel}   ` +
+      `${colorize(restoreMessages.progress.size, COLORS.dim)}: ${rawLabel}${FIELD_GAP}${colorize(restoreMessages.progress.br, COLORS.dim)}: ${brLabel}${FIELD_GAP}` +
       `${colorize(restoreMessages.progress.time, COLORS.dim)}: ${colorize(timeLabel, COLORS.green)}`;
     if (renderer) {
       if (!rendererStarted) {
@@ -404,12 +393,26 @@ function runRestore(options) {
   }
   const summary = restoreMessages.summary || {};
   const durationLabel = formatDuration(Number(process.hrtime.bigint() - startAt) / 1e6);
+  const summaryLabelWidth = SUMMARY_LABEL_WIDTH;
+  const doneLabel = padDisplay(summary.done || "Done", summaryLabelWidth);
+  const sep = ", ";
   console.log(
     lang === "zh"
-      ? `${colorize(summary.done, COLORS.green)}: ${summary.add} ${restored}，${summary.del} ${removed}，${summary.skip} ${skipped}， ${summary.total} ${items.length || 0}（${summary.path}：${repoRoot}）`
-      : `${colorize(summary.done, COLORS.green)}: ${summary.add} ${restored}, ${summary.del} ${removed}, ${summary.skip} ${skipped}, ${summary.total} ${items.length || 0} (${summary.path}: ${repoRoot})`,
+      ? `${colorize(doneLabel, COLORS.green)}: ` +
+        `${colorize(summary.add, COLORS.dim)} ${restored}${sep}` +
+        `${colorize(summary.del, COLORS.dim)} ${removed}${sep}` +
+        `${colorize(summary.skip, COLORS.dim)} ${skipped}${sep}` +
+        `${colorize(summary.total, COLORS.dim)} ${items.length || 0}${sep}` +
+        `${colorize("Dur", COLORS.dim)} ${colorize(durationLabel, COLORS.green)} ` +
+        `(${colorize(summary.path, COLORS.dim)}: ${repoRoot})`
+      : `${colorize(doneLabel, COLORS.green)}: ` +
+        `${colorize(summary.add, COLORS.dim)} ${restored}${sep}` +
+        `${colorize(summary.del, COLORS.dim)} ${removed}${sep}` +
+        `${colorize(summary.skip, COLORS.dim)} ${skipped}${sep}` +
+        `${colorize(summary.total, COLORS.dim)} ${items.length || 0}${sep}` +
+        `${colorize("Dur", COLORS.dim)} ${colorize(durationLabel, COLORS.green)} ` +
+        `(${colorize(summary.path, COLORS.dim)}: ${repoRoot})`,
   );
-  console.log(`${colorize("Time", COLORS.dim)}: ${colorize(durationLabel, COLORS.green)}`);
 }
 
 function getBackupInfo(options) {

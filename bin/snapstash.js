@@ -334,13 +334,22 @@ async function runInit() {
       concurrency: {
         enabled: true,
         threads: 4,
-        bigFileMB: 2,
-        fileCountThreshold: 100
+        bigFileMB: 1,
+        fileCountThreshold: 80
       },
       excludes: [
         ".snapstash/",
         "node_modules/",
+        ".next/",
+        ".opennext/",
         "dist/",
+        "build/",
+        ".turbo/",
+        ".cache/",
+        "__pycache__/",
+        ".venv/",
+        "venv/",
+        "*.pyc",
         "*.log",
       ],
     };
@@ -409,16 +418,35 @@ function main() {
     const messages = getMessages(lang);
     const snapMessages = messages.snapstash || {};
     const infoMessages = snapMessages.info || {};
+    const labelWidth = require("../constants").INFO_LABEL_WIDTH;
+    const displayWidth = (text) => {
+      let width = 0;
+      for (const ch of String(text ?? "")) {
+        const code = ch.codePointAt(0);
+        if (!code) continue;
+        if (code <= 0x1f || (code >= 0x7f && code <= 0xa0)) continue;
+        width += code <= 0x7f ? 1 : 2;
+      }
+      return width;
+    };
+    const padLabel = (value) => {
+      const str = String(value ?? "");
+      const width = displayWidth(str);
+      if (width >= labelWidth) return str;
+      return str + " ".repeat(labelWidth - width);
+    };
+    const dim = (text) => `\x1b[2m${text}\x1b[0m`;
+    const label = (text) => dim(padLabel(text));
     console.log(
       [
-        `${infoMessages.version}: ${info.version ?? ""}`,
-        `${infoMessages.createdAt}: ${info.createdAt ?? ""}`,
-        `${infoMessages.repoRoot}: ${info.repoRoot ?? ""}`,
-        `${infoMessages.head}: ${info.head ?? ""}`,
-        `${infoMessages.payloadEncoding}: ${info.payloadEncoding ?? ""}`,
-        `${infoMessages.encrypted}: ${info.encrypted ? "true" : "false"}`,
-        `${infoMessages.source}: ${info.source?.mode ?? ""}${info.source?.root ? ` (${info.source.root})` : ""}`,
-        `${infoMessages.items}: ${info.items ?? 0}`,
+        `${label(infoMessages.version)}: ${info.version ?? ""}`,
+        `${label(infoMessages.createdAt)}: ${info.createdAt ?? ""}`,
+        `${label(infoMessages.repoRoot)}: ${info.repoRoot ?? ""}`,
+        `${label(infoMessages.head)}: ${info.head ?? ""}`,
+        `${label(infoMessages.payloadEncoding)}: ${info.payloadEncoding ?? ""}`,
+        `${label(infoMessages.encrypted)}: ${info.encrypted ? "true" : "false"}`,
+        `${label(infoMessages.source)}: ${info.source?.mode ?? ""}${info.source?.root ? ` (${info.source.root})` : ""}`,
+        `${label(infoMessages.items)}: ${info.items ?? 0}`,
       ].join("\n"),
     );
     return;
