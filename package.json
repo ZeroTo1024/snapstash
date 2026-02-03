@@ -1,6 +1,6 @@
 {
   "name": "snapstash",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Snapshot git index or a directory to JSON with optional encryption",
   "repository": {
     "type": "git",
@@ -21,6 +21,7 @@
     "restore.js",
     "crypto.js",
     "config.js",
+    "colorize.js",
     "i18n.js",
     "constants.js",
     "progress.js",

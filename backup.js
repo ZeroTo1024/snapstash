@@ -12,6 +12,7 @@ const { resolvePassword, DEFAULT_PW_ENV } = require("./crypto");
 const { encodeEncryptedToText, encodePlainToText } = require("./backup-format");
 const { getMessages, formatMessage } = require("./i18n");
 const { createProgressRenderer } = require("./progress");
+const { COLORS, colorize } = require("./colorize");
 const {
   SUMMARY_LABEL_WIDTH,
   STATUS_LABEL_WIDTH,
@@ -38,22 +39,6 @@ const {
 const DEFAULT_BACKUP_FILE = `${DEFAULT_CONFIG_DIR}/${DEFAULT_BACKUP_NAME}`;
 const DEFAULT_PAYLOAD_ENCODING = "br";
 const GIT_MAX_BUFFER = 32 * 1024 * 1024;
-const COLOR_ENABLED = process.stdout.isTTY;
-
-const COLORS = {
-  reset: "\x1b[0m",
-  bold: "\x1b[1m",
-  dim: "\x1b[2m",
-  cyan: "\x1b[36m",
-  green: "\x1b[32m",
-  yellow: "\x1b[33m",
-  magenta: "\x1b[35m",
-};
-
-function colorize(text, color) {
-  if (!COLOR_ENABLED) return text;
-  return `${color}${text}${COLORS.reset}`;
-}
 
 function resolveHelpLang() {
   try {
@@ -365,6 +350,36 @@ function displayWidth(text) {
     width += code <= 0x7f ? 1 : 2;
   }
   return width;
+}
+
+function truncateDisplay(text, maxWidth) {
+  const str = String(text ?? "");
+  if (maxWidth <= 0) return "";
+  let width = 0;
+  let out = "";
+  for (const ch of str) {
+    const code = ch.codePointAt(0);
+    if (!code) continue;
+    const chWidth = code <= 0x7f ? 1 : 2;
+    if (width + chWidth > maxWidth) break;
+    out += ch;
+    width += chWidth;
+  }
+  if (out.length < str.length && maxWidth >= 3) {
+    let trimWidth = maxWidth - 3;
+    let trimmed = "";
+    let acc = 0;
+    for (const ch of out) {
+      const code = ch.codePointAt(0);
+      if (!code) continue;
+      const chWidth = code <= 0x7f ? 1 : 2;
+      if (acc + chWidth > trimWidth) break;
+      trimmed += ch;
+      acc += chWidth;
+    }
+    return `${trimmed}...`;
+  }
+  return out;
 }
 
 function padDisplay(text, targetWidth) {
@@ -824,6 +839,7 @@ async function runBackup(options) {
   const lang = resolveConfigLang(config) || "en";
   const messages = getMessages(lang);
   const backupMessages = messages.backup || {};
+  const progressLabel = colorize("progress...", COLORS.cyan);
 
   const password = resolvePassword(options.pw || configPassword, pwEnv);
   const encryptPassword = options.noEncrypt ? null : password;
@@ -836,29 +852,101 @@ async function runBackup(options) {
     pwSource = "env";
   }
 
-  const renderer = createProgressRenderer({ windowSize: 30 });
+  const renderer = createProgressRenderer({ label: progressLabel, force: true });
   let rendererStarted = false;
+  let pendingItems = null;
+  let itemPaths = null;
+  let itemRawBytes = null;
+  let completedCount = 0;
+  const ensurePendingState = (total) => {
+    if (!total) return;
+    if (!pendingItems || pendingItems.length !== total) {
+      pendingItems = Array(total).fill(true);
+      itemPaths = Array(total).fill("");
+      itemRawBytes = Array(total).fill(0);
+    }
+  };
+  const pickNeighbor = (index, total) => {
+    if (!pendingItems) return null;
+    const hasInfo = (i) => pendingItems[i] && itemPaths[i];
+    for (let i = index - 1; i >= 0; i -= 1) {
+      if (hasInfo(i)) return i;
+    }
+    for (let i = index + 1; i < total; i += 1) {
+      if (hasInfo(i)) return i;
+    }
+    for (let i = index - 1; i >= 0; i -= 1) {
+      if (pendingItems[i]) return i;
+    }
+    for (let i = index + 1; i < total; i += 1) {
+      if (pendingItems[i]) return i;
+    }
+    return null;
+  };
   const logProgress = options.progress
     ? (item, index, total, rawBytes, brBytes, durationMs, status) => {
         const progress = backupMessages.progress || {};
-        const statusText = status || "done";
-        const statusLabel = statusText.padEnd(STATUS_LABEL_WIDTH, " ");
-        const statusColor = statusText === "processing" ? COLORS.dim : COLORS.cyan;
-        const count = total ? ` [${index}/${total}]` : "";
-        const countLabel = colorize(count, COLORS.dim);
-        const rawLabel = formatSize(rawBytes || 0).padStart(10, " ");
-        const brLabel = (brBytes ? formatSize(brBytes) : "0.00 KB").padStart(10, " ");
-        const pathLabel = String(item.path || "").padEnd(PATH_LABEL_WIDTH, " ");
-        const timeLabel = formatDuration(durationMs || 0).padStart(7, " ");
-        const line = `${colorize(statusLabel, statusColor)}${countLabel} ${colorize(pathLabel, COLORS.bold)} ` +
-          `${colorize(progress.size, COLORS.dim)}: ${rawLabel}${FIELD_GAP}${colorize(progress.br, COLORS.dim)}: ${brLabel}${FIELD_GAP}` +
-          `${colorize(progress.time, COLORS.dim)}: ${colorize(timeLabel, COLORS.green)}`;
+        const statusKey = status || "done";
+        const buildLine = (lineStatus, lineIndex, lineRawBytes, lineBrBytes, lineDur, linePath) => {
+          const statusLabel = lineStatus.padEnd(STATUS_LABEL_WIDTH, " ");
+          const statusColor = lineStatus === "processing" ? COLORS.dim : COLORS.cyan;
+          let countLabel = "";
+          if (total) {
+            if (lineStatus === "processing") {
+              const remaining = Math.max(total - completedCount, 0);
+              const left = colorize(` [${remaining}/`, COLORS.dim);
+              const right = colorize(String(completedCount), COLORS.cyan);
+              const end = colorize("]", COLORS.dim);
+              countLabel = `${left}${right}${end}`;
+            } else {
+              const count = ` [${lineIndex}/${total}]`;
+              countLabel = colorize(count, COLORS.dim);
+            }
+          }
+          const rawLabel = formatSize(lineRawBytes || 0).padStart(10, " ");
+          const brLabel = (lineBrBytes ? formatSize(lineBrBytes) : "0.00 KB").padStart(10, " ");
+          const pathLabel = truncateDisplay(String(linePath || "(pending)"), PATH_LABEL_WIDTH).padEnd(PATH_LABEL_WIDTH, " ");
+          const timeLabel = formatDuration(lineDur || 0).padStart(7, " ");
+          return `${colorize(statusLabel, statusColor)}${countLabel} ${colorize(pathLabel, COLORS.bold)} ` +
+            `${colorize(progress.size, COLORS.dim)}: ${rawLabel}${FIELD_GAP}${colorize(progress.br, COLORS.dim)}: ${brLabel}${FIELD_GAP}` +
+            `${colorize(progress.time, COLORS.dim)}: ${colorize(timeLabel, COLORS.green)}`;
+        };
+        const line = buildLine(statusKey, index, rawBytes, brBytes, durationMs, item.path);
         if (renderer && total) {
+          ensurePendingState(total);
+          const idx = Math.max(0, index - 1);
           if (!rendererStarted) {
             renderer.start(total);
             rendererStarted = true;
           }
-          renderer.update(index, line, statusText);
+          if (item?.path) itemPaths[idx] = item.path;
+          if (Number.isFinite(rawBytes)) itemRawBytes[idx] = rawBytes;
+          if (statusKey === "processing") {
+            renderer.update(index, line, statusKey);
+            return;
+          }
+          if (statusKey === "done") {
+            pendingItems[idx] = false;
+            completedCount = Math.min(completedCount + 1, total || completedCount + 1);
+            renderer.write(line);
+            renderer.update(index, line, statusKey);
+            const neighbor = pickNeighbor(idx, total);
+            if (neighbor !== null) {
+              const nextLine = buildLine(
+                "processing",
+                neighbor + 1,
+                itemRawBytes[neighbor],
+                0,
+                0,
+                itemPaths[neighbor]
+              );
+              renderer.setProcessing(nextLine);
+            } else {
+              renderer.setProcessing("");
+            }
+            return;
+          }
+          renderer.update(index, line, statusKey);
         } else {
           console.log(line);
         }
@@ -895,7 +983,8 @@ async function runBackup(options) {
   const summaryLabelWidth = SUMMARY_LABEL_WIDTH;
   const formatSummaryLine = (label, value, color) => {
     const text = padDisplay(label, summaryLabelWidth);
-    return `${colorize(text, color || COLORS.magenta)}：${value}`;
+    const safeValue = String(value ?? "").trimStart();
+    return `${colorize(text, color || COLORS.magenta)}：${safeValue}`;
   };
   if (rendererStarted && renderer) {
     renderer.stop();

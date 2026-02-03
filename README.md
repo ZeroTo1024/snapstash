@@ -173,6 +173,7 @@ Config resolution order:
 
 ## Links
 
-- https://ricebowl.ai/m/nano-banana-2
-- https://ricebowl.ai/m/sora/sora-2
-- https://ricebowl.ai
+- [Nano Banana 2 — Lightning-Fast Image Gen](https://ricebowl.ai/m/nano-banana-2)
+- [Sora 2 — Text-to-Video Playground](https://ricebowl.ai/m/sora/sora-2)
+- [Grok Video — Viral AI Clips](https://ricebowl.ai/m/grok-video)
+- [Ricebowl AI — All-in-one AI Video Studio](https://ricebowl.ai)

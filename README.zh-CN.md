@@ -173,6 +173,7 @@ snapstash init
 
 ## 友情链接
 
-- https://ricebowl.ai/m/nano-banana-2
-- https://ricebowl.ai/m/sora/sora-2
-- https://ricebowl.ai
+- [Nano Banana 2｜极速图片生成](https://ricebowl.ai/m/nano-banana-2)
+- [Sora 2｜文本转视频体验](https://ricebowl.ai/m/sora/sora-2)
+- [Grok Video｜爆款 AI 视频](https://ricebowl.ai/m/grok-video)
+- [Ricebowl AI｜一站式 AI 视频平台](https://ricebowl.ai)
