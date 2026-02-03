@@ -1,7 +1,15 @@
 {
   "name": "snapstash",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Snapshot git index or a directory to JSON with optional encryption",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/ZeroTo1024/snapstash.git"
+  },
+  "homepage": "https://github.com/ZeroTo1024/snapstash#readme",
+  "bugs": {
+    "url": "https://github.com/ZeroTo1024/snapstash/issues"
+  },
   "type": "commonjs",
   "bin": {
     "snapstash": "bin/snapstash.js"

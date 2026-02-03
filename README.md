@@ -1,6 +1,6 @@
 # snapstash
 
-English | [简体中文](README.zh-CN.md)
+English | [简体中文](https://github.com/ZeroTo1024/snapstash/blob/main/README.zh-CN.md)
 
 A tiny CLI to snapshot Git index (staged changes) or a directory into `.snapstash/.backup`, with optional AES-256-GCM encryption.
 
